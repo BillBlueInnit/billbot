@@ -4,6 +4,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -120,6 +121,115 @@ func TestServiceHandlesMessageAndPersistsSession(t *testing.T) {
 	session, ok := store.Get(state.Key("qq", "private:10001", "10001"))
 	if !ok || session.Turns != 1 || session.ID != "session-1" {
 		t.Fatalf("session not persisted: ok=%v session=%#v", ok, session)
+	}
+}
+
+func TestServiceHandlesGroupOnlyWhenMentionedByDefault(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Bridge.SelfID = 12345
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+	calls := 0
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		calls++
+		return "group reply", "", nil
+	}
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		BotID:    "12345",
+		ChatID:   "group:200",
+		GroupID:  "200",
+		UserID:   "10001",
+		Private:  false,
+		Text:     "hello group",
+	})
+	if calls != 0 || len(fake.sent) != 0 {
+		t.Fatalf("unmentioned group message was handled: calls=%d sent=%#v", calls, fake.sent)
+	}
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		BotID:    "12345",
+		ChatID:   "group:200",
+		GroupID:  "200",
+		UserID:   "10001",
+		Private:  false,
+		Text:     "[CQ:at,qq=12345] hello",
+	})
+	if calls != 1 {
+		t.Fatalf("mentioned group message was not handled: calls=%d", calls)
+	}
+	if len(fake.sent) != 1 || fake.sent[0].chatID != "group:200" || fake.sent[0].text != "group reply" {
+		t.Fatalf("unexpected group reply: %#v", fake.sent)
+	}
+}
+
+func TestServiceHandlesAllGroupMessagesWhenConfigured(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Bridge.RespondToGroupMentionsOnly = false
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		return "group reply", "", nil
+	}
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		BotID:    "12345",
+		ChatID:   "group:200",
+		GroupID:  "200",
+		UserID:   "10001",
+		Private:  false,
+		Text:     "hello group",
+	})
+
+	if len(fake.sent) != 1 || fake.sent[0].chatID != "group:200" {
+		t.Fatalf("configured group message was not handled: %#v", fake.sent)
+	}
+}
+
+func TestServiceIgnoresSelfAndEmptyMessages(t *testing.T) {
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Bridge.SelfID = 12345
+	svc := NewService(cfg)
+	calls := 0
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		calls++
+		return "reply", "", nil
+	}
+
+	svc.handleMessage(testMessage("   ", "10001"))
+	self := testMessage("hello", "12345")
+	self.BotID = "12345"
+	svc.handleMessage(self)
+
+	if calls != 0 {
+		t.Fatalf("ignored messages reached Hermes: calls=%d", calls)
+	}
+}
+
+func TestServiceRecoversFromHandlerPanic(t *testing.T) {
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	svc := NewService(cfg)
+	svc.conn = &fakeConnector{}
+	svc.running = true
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		panic("boom")
+	}
+
+	svc.handleMessage(testMessage("hello", "10001"))
+
+	if !strings.Contains(svc.Status().LastError, "message handler panic") {
+		t.Fatalf("panic was not recorded in status: %#v", svc.Status())
 	}
 }
 
@@ -265,6 +375,56 @@ func TestServiceRoutesStrongOnMarker(t *testing.T) {
 	}
 	if !slices.Equal(models, []string{"base", "strong"}) {
 		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestServiceRoutesStrongOnBaseTimeout(t *testing.T) {
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Models.BaseModel = "base"
+	cfg.Models.StrongModel = "strong"
+	cfg.Models.RoutingTimeoutSec = 1
+	svc := NewService(cfg)
+	var models []string
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		models = append(models, cfg.Models.DefaultModel)
+		if cfg.Models.DefaultModel == "base" {
+			<-ctx.Done()
+			return "", "", ctx.Err()
+		}
+		return "strong answer", "session-strong", nil
+	}
+
+	reply, err := svc.runWithSession(context.Background(), cfg, testMessage("hard", "10001"), svc.sessions, "key", "", "", svc.runHermes)
+	if err != nil {
+		t.Fatalf("runWithSession: %v", err)
+	}
+	if reply != "strong answer" {
+		t.Fatalf("reply = %q", reply)
+	}
+	if !slices.Equal(models, []string{"base", "strong"}) {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestServiceRecordsHermesErrorInStatus(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		return "", "", errors.New("hermes failed")
+	}
+
+	svc.handleMessage(testMessage("hello", "10001"))
+
+	if !strings.Contains(svc.Status().LastError, "hermes failed") {
+		t.Fatalf("Hermes error was not recorded: %#v", svc.Status())
+	}
+	if len(fake.sent) != 1 || !strings.Contains(fake.sent[0].text, "Hermes") {
+		t.Fatalf("failure reply missing: %#v", fake.sent)
 	}
 }
 
