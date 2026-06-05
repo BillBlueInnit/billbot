@@ -4,8 +4,13 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +19,8 @@ import (
 	"billbot/internal/config"
 	"billbot/internal/connector"
 	"billbot/internal/state"
+
+	"github.com/gorilla/websocket"
 )
 
 type fakeConnector struct {
@@ -471,4 +478,133 @@ func TestServiceSendsProgressForSlowWork(t *testing.T) {
 	if !slices.Contains(texts, "done") {
 		t.Fatalf("final reply missing: %#v", texts)
 	}
+}
+
+func TestServiceEndToEndWithMockNapCatAndHermes(t *testing.T) {
+	napcat := newMockNapCatServer(t)
+	defer napcat.close()
+
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.NapCat.HTTP = napcat.httpURL
+	cfg.NapCat.WS = napcat.wsURL
+	cfg.Hermes.Command = fakeHermesCommand(t)
+	cfg.Models.HeavyTimeoutSec = 5
+	cfg.Bridge.RespondToGroupMentionsOnly = false
+
+	svc := NewService(cfg)
+	if err := svc.Start(); err != nil {
+		t.Fatalf("start bridge: %v", err)
+	}
+	defer svc.Stop()
+
+	napcat.sendWS(t, `{"post_type":"message","message_type":"private","self_id":12345,"user_id":67890,"raw_message":"hello bridge"}`)
+
+	select {
+	case reply := <-napcat.replies:
+		if reply.Path != "/send_private_msg" {
+			t.Fatalf("reply path = %q", reply.Path)
+		}
+		if reply.Body["user_id"] != float64(67890) {
+			t.Fatalf("reply user_id = %#v", reply.Body["user_id"])
+		}
+		message, _ := reply.Body["message"].(string)
+		if !strings.Contains(message, "mock hermes reply") {
+			t.Fatalf("reply message = %q", message)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for bridge reply")
+	}
+}
+
+type mockNapCatServer struct {
+	httpURL string
+	wsURL   string
+	server  *httptest.Server
+	ws      chan *websocket.Conn
+	replies chan mockNapCatReply
+}
+
+type mockNapCatReply struct {
+	Path string
+	Body map[string]any
+}
+
+func newMockNapCatServer(t *testing.T) *mockNapCatServer {
+	t.Helper()
+	mock := &mockNapCatServer{
+		ws:      make(chan *websocket.Conn, 1),
+		replies: make(chan mockNapCatReply, 4),
+	}
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/get_status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"online": true})
+		case "/ws":
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade ws: %v", err)
+				return
+			}
+			mock.ws <- conn
+		case "/send_private_msg", "/send_group_msg":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode reply body: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			mock.replies <- mockNapCatReply{Path: r.URL.Path, Body: body}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	mock.server = server
+	mock.httpURL = server.URL
+	mock.wsURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	return mock
+}
+
+func (m *mockNapCatServer) close() {
+	select {
+	case conn := <-m.ws:
+		_ = conn.Close()
+	default:
+	}
+	m.server.Close()
+}
+
+func (m *mockNapCatServer) sendWS(t *testing.T, payload string) {
+	t.Helper()
+	var conn *websocket.Conn
+	select {
+	case conn = <-m.ws:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for bridge websocket connection")
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+		t.Fatalf("write websocket message: %v", err)
+	}
+	m.ws <- conn
+}
+
+func fakeHermesCommand(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "fake-hermes.cmd")
+		body := "@echo off\r\necho mock hermes reply\r\necho session_id: e2e-session\r\n"
+		if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+			t.Fatalf("write fake hermes command: %v", err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "fake-hermes")
+	body := "#!/bin/sh\nprintf '%s\\n' 'mock hermes reply'\nprintf '%s\\n' 'session_id: e2e-session'\n"
+	if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+		t.Fatalf("write fake hermes command: %v", err)
+	}
+	return path
 }
