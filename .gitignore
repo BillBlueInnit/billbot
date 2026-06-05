@@ -32,6 +32,7 @@ coverage.out
 *.log
 *.pid
 *.sock
+/test/real-qq/runtime/
 
 # NapCat / QQ local artifacts
 /NapCat/
