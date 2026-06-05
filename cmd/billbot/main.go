@@ -46,6 +46,7 @@ func main() {
 		}
 	}
 	setupLogging(cfg.Runtime.LogFile)
+	log.Printf("billbot starting config=%s port=%d cli=%t", *configPath, cfg.Server.Port, *cliMode)
 
 	bridgeSvc := bridge.NewService(cfg)
 	if *cliMode {
@@ -129,7 +130,9 @@ func main() {
 			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 			return
 		}
-		writeJSON(w, map[string]any{"diagnostics": diagnostics.Run(r.Context(), cfg)})
+		report := diagnostics.Run(r.Context(), cfg)
+		log.Printf("diagnostics napcat_http=%t napcat_ws=%t hermes_found=%t hermes_status=%t hermes_chat=%t", report.NapCat.HTTPReachable, report.NapCat.WSReachable, report.Hermes.CommandFound, report.Hermes.StatusOK, report.Hermes.ChatOK)
+		writeJSON(w, map[string]any{"diagnostics": report})
 	})
 	mux.HandleFunc("/api/processes/napcat/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -253,7 +256,9 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 				"diagnostics": diagnostics.Run(ctx, cfg),
 			})
 		case "diag":
-			printJSON(map[string]any{"diagnostics": diagnostics.Run(ctx, cfg)})
+			report := diagnostics.Run(ctx, cfg)
+			log.Printf("diagnostics napcat_http=%t napcat_ws=%t hermes_found=%t hermes_status=%t hermes_chat=%t", report.NapCat.HTTPReachable, report.NapCat.WSReachable, report.Hermes.CommandFound, report.Hermes.StatusOK, report.Hermes.ChatOK)
+			printJSON(map[string]any{"diagnostics": report})
 		case "napcat":
 			printJSON(map[string]any{"napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
 		case "napcat-start":
@@ -398,6 +403,44 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		cfg.Models.StrongProvider = value
 	case "models.strong_model":
 		cfg.Models.StrongModel = value
+	case "models.special_model":
+		cfg.Models.SpecialModel = value
+	case "models.routing_timeout_sec":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Models.RoutingTimeoutSec = v
+	case "models.flash_timeout_sec":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Models.FlashTimeoutSec = v
+	case "models.heavy_timeout_sec":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Models.HeavyTimeoutSec = v
+	case "runtime.start_notice_delay_sec":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Runtime.StartNoticeDelaySec = v
+	case "runtime.progress_interval_sec":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Runtime.ProgressIntervalSec = v
+	case "runtime.max_turns":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Runtime.MaxTurns = v
 	case "login.qr_command":
 		cfg.Login.QRCommand = strings.Fields(value)
 	case "login.status_command":
@@ -421,6 +464,17 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 	}
 	cfg.Normalize()
 	return nil
+}
+
+func parsePositiveInt(value string) (int, error) {
+	v, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, err
+	}
+	if v <= 0 {
+		return 0, fmt.Errorf("value must be positive")
+	}
+	return v, nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

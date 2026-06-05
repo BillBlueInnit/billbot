@@ -30,6 +30,27 @@ func TestSetConfigValue(t *testing.T) {
 	if len(cfg.Login.QRCommand) != 2 || cfg.Login.QRCommand[0] != "printf" {
 		t.Fatalf("qr command = %#v", cfg.Login.QRCommand)
 	}
+	if err := setConfigValue(&cfg, "models.routing_timeout_sec", "12"); err != nil {
+		t.Fatalf("set routing timeout: %v", err)
+	}
+	if cfg.Models.RoutingTimeoutSec != 12 {
+		t.Fatalf("routing timeout = %d", cfg.Models.RoutingTimeoutSec)
+	}
+	if err := setConfigValue(&cfg, "runtime.progress_interval_sec", "7"); err != nil {
+		t.Fatalf("set progress interval: %v", err)
+	}
+	if cfg.Runtime.ProgressIntervalSec != 7 {
+		t.Fatalf("progress interval = %d", cfg.Runtime.ProgressIntervalSec)
+	}
+	if err := setConfigValue(&cfg, "models.special_model", "special"); err != nil {
+		t.Fatalf("set special model: %v", err)
+	}
+	if cfg.Models.SpecialModel != "special" {
+		t.Fatalf("special model = %q", cfg.Models.SpecialModel)
+	}
+	if err := setConfigValue(&cfg, "models.heavy_timeout_sec", "0"); err == nil {
+		t.Fatal("expected invalid positive integer error")
+	}
 }
 
 func TestReadLogTail(t *testing.T) {
