@@ -198,13 +198,13 @@ func (s *Service) handleMessage(msg connector.Message) {
 	if cfg.Security.Mode == "full" {
 		decision := security.CanUseFullEnvironment(cfg, userID)
 		if !decision.Allowed {
-			_ = conn.Send(msg.ChatID, "BillBot 已拒绝 full environment 请求："+decision.Reason)
+			_ = conn.Send(msg.ChatID, "BillBot rejected the full environment request: "+decision.Reason)
 			return
 		}
 	}
 	decision := security.CanHandleSensitiveRequest(cfg, userID, msg.Text)
 	if !decision.Allowed {
-		_ = conn.Send(msg.ChatID, "BillBot 已拒绝该敏感请求："+decision.Reason)
+		_ = conn.Send(msg.ChatID, "BillBot rejected the sensitive request: "+decision.Reason)
 		return
 	}
 
@@ -220,7 +220,7 @@ func (s *Service) handleMessage(msg connector.Message) {
 	progressDone()
 	if err != nil {
 		s.setError(err.Error())
-		reply = "BillBot 调用 Hermes 失败：" + err.Error()
+		reply = "BillBot Hermes call failed: " + err.Error()
 	}
 	reply = strings.TrimSpace(reply)
 	if reply == "" {
@@ -414,7 +414,20 @@ func defaultRunHermes(ctx context.Context, cfg config.Config, msg connector.Mess
 	runner := hermes.NewRunner(cfg.Hermes.Command)
 	opts := hermes.OptionsFromConfig(cfg)
 	opts.SessionID = sessionID
-	return runner.AskWithSession(ctx, prompt, opts)
+	started := time.Now()
+	log.Printf("hermes start model=%q provider=%q resume=%t chat=%s user=%s", opts.Model, opts.Provider, sessionID != "", msg.ChatID, msg.UserID)
+	reply, newSessionID, err := runner.AskWithSession(ctx, prompt, opts)
+	elapsed := time.Since(started)
+	if err != nil {
+		if ctx.Err() != nil {
+			log.Printf("hermes timeout/error elapsed=%s err=%v", elapsed, ctx.Err())
+		} else {
+			log.Printf("hermes error elapsed=%s err=%v", elapsed, err)
+		}
+		return reply, newSessionID, err
+	}
+	log.Printf("hermes end elapsed=%s reply_bytes=%d new_session=%t", elapsed, len(reply), newSessionID != "")
+	return reply, newSessionID, nil
 }
 
 func buildPrompt(cfg config.Config, msg connector.Message) string {
