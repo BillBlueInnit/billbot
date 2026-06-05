@@ -10,28 +10,28 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
-	"billbot/internal/autostart"
 	"billbot/internal/bridge"
 	"billbot/internal/config"
-	"billbot/internal/connector/napcat"
 	"billbot/internal/diagnostics"
-	"billbot/internal/loginqr"
+
+	"github.com/chzyer/readline"
+	"golang.org/x/term"
 )
 
 func main() {
-	defaultConfigPath := filepath.Join(config.AppDir(), "config.yaml")
-	port := flag.Int("port", 0, "dashboard port")
+	defaultConfigPath := defaultConfigPath()
+	port := flag.Int("port", 0, "deprecated compatibility flag; no HTTP listener is started")
 	configPath := flag.String("config", defaultConfigPath, "config path")
-	webDir := flag.String("web", defaultWebDir(), "dashboard static file directory")
-	cliMode := flag.Bool("cli", false, "run terminal control mode")
+	cliMode := flag.Bool("cli", false, "deprecated compatibility flag; interactive CLI is the default")
 	flag.Parse()
 
+	configExists := fileExists(*configPath)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -40,221 +40,70 @@ func main() {
 		cfg.Server.Port = *port
 	}
 	cfg.Normalize()
+	if !configExists {
+		cfg = generatedConfigDefaults(*configPath, cfg)
+		if err := config.Save(*configPath, cfg); err != nil {
+			log.Fatalf("create default config %s: %v", *configPath, err)
+		}
+		fmt.Printf("created default config: %s\n", *configPath)
+	}
 
 	for _, dir := range []string{cfg.Runtime.DataDir, filepath.Dir(cfg.Runtime.LogFile), cfg.Runtime.OutboxDir, cfg.Runtime.TmpDir, cfg.Runtime.SandboxDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			log.Fatalf("create runtime dir %s: %v", dir, err)
 		}
 	}
-	setupLogging(cfg.Runtime.LogFile)
-	log.Printf("billbot starting config=%s port=%d cli=%t", *configPath, cfg.Server.Port, *cliMode)
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	setupLogging(cfg.Runtime.LogFile, interactive)
+	log.Printf("billbot starting config=%s interactive=%t cli_flag=%t", *configPath, interactive, *cliMode)
 
 	bridgeSvc := bridge.NewService(cfg)
-	if err := startConfiguredBridge(cfg, bridgeSvc); err != nil {
-		log.Printf("auto start bridge failed: %v", err)
-	}
-	if *cliMode {
-		runCLI(context.Background(), cfg, *configPath, bridgeSvc)
-		return
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ok": true, "service": "billbot", "config_path": *configPath})
-	})
-	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, map[string]any{"config": cfg, "config_path": *configPath})
-		case http.MethodPost:
-			var in config.Config
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
-			in.Normalize()
-			if *port > 0 {
-				in.Server.Port = *port
-			}
-			if err := config.Save(*configPath, in); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			cfg = in
-			bridgeSvc.UpdateConfig(cfg)
-			writeJSON(w, map[string]any{"ok": true, "config": cfg, "config_path": *configPath})
-		default:
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		}
-	})
-	mux.HandleFunc("/api/connectors/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		conn := napcat.New(cfg.NapCat)
-		status, err := conn.Status()
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"connectors": []any{status}})
-	})
-	mux.HandleFunc("/api/bridge/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		writeJSON(w, map[string]any{"bridge": bridgeSvc.Status()})
-	})
-	mux.HandleFunc("/api/bridge/start", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		if err := bridgeSvc.Start(); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
-	})
-	mux.HandleFunc("/api/bridge/stop", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		if err := bridgeSvc.Stop(); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
-	})
-	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		report := diagnostics.Run(r.Context(), cfg)
-		log.Printf("diagnostics napcat_http=%t napcat_ws=%t hermes_found=%t hermes_status=%t hermes_chat=%t", report.NapCat.HTTPReachable, report.NapCat.WSReachable, report.Hermes.CommandFound, report.Hermes.StatusOK, report.Hermes.ChatOK)
-		writeJSON(w, map[string]any{"diagnostics": report})
-	})
-	mux.HandleFunc("/api/processes/napcat/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		writeJSON(w, map[string]any{"napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
-	})
-	mux.HandleFunc("/api/processes/napcat/start", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		if err := bridgeSvc.StartNapCatProcess(r.Context()); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
-	})
-	mux.HandleFunc("/api/processes/napcat/stop", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		if err := bridgeSvc.StopNapCatProcess(); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
-	})
-	mux.HandleFunc("/api/autostart/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		writeJSON(w, map[string]any{"autostart": autostart.NewManager().Status(cfg, autostartOptions(*configPath, cfg))})
-	})
-	mux.HandleFunc("/api/autostart/enable", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		status, err := autostart.NewManager().Enable(r.Context(), cfg, autostartOptions(*configPath, cfg))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		cfg.Autostart.Enabled = true
-		if err := config.Save(*configPath, cfg); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		log.Printf("autostart enabled platform=%s target=%s", status.Platform, status.Target)
-		writeJSON(w, map[string]any{"ok": true, "autostart": status})
-	})
-	mux.HandleFunc("/api/autostart/disable", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		status, err := autostart.NewManager().Disable(r.Context(), cfg, autostartOptions(*configPath, cfg))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		cfg.Autostart.Enabled = false
-		if err := config.Save(*configPath, cfg); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		log.Printf("autostart disabled platform=%s target=%s", status.Platform, status.Target)
-		writeJSON(w, map[string]any{"ok": true, "autostart": status})
-	})
-	mux.HandleFunc("/api/login/qr", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		out, err := loginqr.Fetch(r.Context(), cfg.Login)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"qr": out})
-	})
-	mux.HandleFunc("/api/login/status", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		out, err := loginqr.Status(r.Context(), cfg.Login)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"login": out})
-	})
-	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-			return
-		}
-		text, err := readLogTail(cfg.Runtime.LogFile, 65536)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, map[string]any{"log": text})
-	})
-	mux.Handle("/", http.FileServer(http.Dir(*webDir)))
-
-	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	log.Printf("billbot listening on %s", addr)
-	log.Printf("dashboard web dir %s", *webDir)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	bridgeSvc.SetConfigPath(*configPath)
+	runCLI(context.Background(), cfg, *configPath, bridgeSvc, interactive)
 }
 
-func setupLogging(path string) {
+func defaultConfigPath() string {
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		dir := filepath.Dir(exe)
+		tomlPath := filepath.Join(dir, "config.toml")
+		if fileExists(tomlPath) {
+			return tomlPath
+		}
+		yamlPath := filepath.Join(dir, "config.yaml")
+		if fileExists(yamlPath) {
+			return yamlPath
+		}
+		return tomlPath
+	}
+	if fileExists("config.toml") {
+		return "config.toml"
+	}
+	if fileExists("config.yaml") {
+		return "config.yaml"
+	}
+	return "config.toml"
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func generatedConfigDefaults(path string, cfg config.Config) config.Config {
+	base := filepath.Dir(path)
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
+	}
+	runtimeDir := filepath.Join(base, "runtime")
+	cfg.Runtime.DataDir = filepath.Join(runtimeDir, "data")
+	cfg.Runtime.LogFile = filepath.Join(runtimeDir, "logs", "billbot.log")
+	cfg.Runtime.OutboxDir = filepath.Join(runtimeDir, "outbox")
+	cfg.Runtime.TmpDir = filepath.Join(runtimeDir, "tmp")
+	cfg.Runtime.SandboxDir = filepath.Join(runtimeDir, "sandbox")
+	return cfg
+}
+
+func setupLogging(path string, interactive bool) {
 	if strings.TrimSpace(path) == "" {
 		return
 	}
@@ -267,6 +116,10 @@ func setupLogging(path string) {
 		log.Printf("open log file: %v", err)
 		return
 	}
+	if interactive {
+		log.SetOutput(file)
+		return
+	}
 	log.SetOutput(io.MultiWriter(os.Stdout, file))
 }
 
@@ -277,175 +130,277 @@ func startConfiguredBridge(cfg config.Config, bridgeSvc *bridge.Service) error {
 	return bridgeSvc.Start()
 }
 
-func autostartOptions(configPath string, cfg config.Config) autostart.Options {
-	exe, _ := os.Executable()
-	return autostart.Options{
-		ExePath:    exe,
-		ConfigPath: configPath,
-		Port:       cfg.Server.Port,
-	}
+type cliState struct {
+	mu         sync.Mutex
+	cfg        config.Config
+	configPath string
+	bridgeSvc  *bridge.Service
 }
 
-func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc *bridge.Service) {
+func newCLIState(cfg config.Config, configPath string, bridgeSvc *bridge.Service) *cliState {
+	return &cliState{cfg: cfg, configPath: configPath, bridgeSvc: bridgeSvc}
+}
+
+func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc *bridge.Service, interactive bool) {
+	state := newCLIState(cfg, configPath, bridgeSvc)
+	if interactive {
+		runInteractiveCLI(ctx, state)
+		return
+	}
+	runREPL(ctx, state)
+}
+
+func runREPL(ctx context.Context, state *cliState) {
 	fmt.Println("BillBot CLI")
-	fmt.Printf("config: %s\n", configPath)
-	fmt.Printf("dashboard port: %d\n", cfg.Server.Port)
-	fmt.Println("commands: status, diag, start, stop, napcat, napcat-start, napcat-stop, autostart, autostart-enable, autostart-disable, qr, login, logs, set, help, quit")
+	fmt.Printf("config: %s\n", state.configPath)
+	fmt.Println(strings.TrimSpace(helpText()))
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("billbot> ")
 		if !scanner.Scan() {
 			break
 		}
-		line := normalizeCLIInput(scanner.Text())
-		switch strings.ToLower(line) {
-		case "", "help":
-			fmt.Println("status  show bridge status")
-			fmt.Println("diag    run NapCat and Hermes diagnostics")
-			fmt.Println("start   start bridge and configured NapCat process")
-			fmt.Println("stop    stop bridge")
-			fmt.Println("napcat  show managed NapCat process status")
-			fmt.Println("napcat-start  start configured NapCat process")
-			fmt.Println("napcat-stop   stop managed NapCat process")
-			fmt.Println("autostart  show OS autostart status")
-			fmt.Println("autostart-enable   enable OS autostart for BillBot")
-			fmt.Println("autostart-disable  disable OS autostart for BillBot")
-			fmt.Println("qr      show QQ login QR availability")
-			fmt.Println("login   show QQ login status")
-			fmt.Println("logs    show recent runtime logs")
-			fmt.Println("set KEY VALUE  update a supported config field and save")
-			fmt.Println("quit    exit CLI")
-		case "status":
-			printJSON(map[string]any{
-				"bridge":      bridgeSvc.Status(),
-				"dashboard":   fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
-				"diagnostics": diagnostics.Run(ctx, cfg),
-			})
-		case "diag":
-			report := diagnostics.Run(ctx, cfg)
-			log.Printf("diagnostics napcat_http=%t napcat_ws=%t hermes_found=%t hermes_status=%t hermes_chat=%t", report.NapCat.HTTPReachable, report.NapCat.WSReachable, report.Hermes.CommandFound, report.Hermes.StatusOK, report.Hermes.ChatOK)
-			printJSON(map[string]any{"diagnostics": report})
-		case "napcat":
-			printJSON(map[string]any{"napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
-		case "napcat-start":
-			if err := bridgeSvc.StartNapCatProcess(ctx); err != nil {
-				fmt.Printf("napcat start failed: %v\n", err)
-				continue
-			}
-			printJSON(map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
-		case "napcat-stop":
-			if err := bridgeSvc.StopNapCatProcess(); err != nil {
-				fmt.Printf("napcat stop failed: %v\n", err)
-				continue
-			}
-			printJSON(map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
-		case "autostart":
-			printJSON(map[string]any{"autostart": autostart.NewManager().Status(cfg, autostartOptions(configPath, cfg))})
-		case "autostart-enable":
-			status, err := autostart.NewManager().Enable(ctx, cfg, autostartOptions(configPath, cfg))
-			if err != nil {
-				fmt.Printf("autostart enable failed: %v\n", err)
-				continue
-			}
-			cfg.Autostart.Enabled = true
-			if err := config.Save(configPath, cfg); err != nil {
-				fmt.Printf("save failed: %v\n", err)
-				continue
-			}
-			printJSON(map[string]any{"ok": true, "autostart": status})
-		case "autostart-disable":
-			status, err := autostart.NewManager().Disable(ctx, cfg, autostartOptions(configPath, cfg))
-			if err != nil {
-				fmt.Printf("autostart disable failed: %v\n", err)
-				continue
-			}
-			cfg.Autostart.Enabled = false
-			if err := config.Save(configPath, cfg); err != nil {
-				fmt.Printf("save failed: %v\n", err)
-				continue
-			}
-			printJSON(map[string]any{"ok": true, "autostart": status})
-		case "start":
-			if err := bridgeSvc.Start(); err != nil {
-				fmt.Printf("start failed: %v\n", err)
-				continue
-			}
-			printJSON(map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
-		case "stop":
-			if err := bridgeSvc.Stop(); err != nil {
-				fmt.Printf("stop failed: %v\n", err)
-				continue
-			}
-			printJSON(map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
-		case "qr":
-			out, err := loginqr.Fetch(ctx, cfg.Login)
-			if err != nil {
-				fmt.Printf("qr failed: %v\n", err)
-				fmt.Println("Configure login.qr_command with a cross-platform NapCat launcher/API command that prints QR content.")
-				continue
-			}
-			fmt.Println(out.Render)
-		case "login":
-			out, err := loginqr.Status(ctx, cfg.Login)
-			if err != nil {
-				fmt.Printf("login status failed: %v\n", err)
-				fmt.Println("Configure login.status_command with a cross-platform NapCat launcher/API command.")
-				continue
-			}
-			printJSON(map[string]any{"login": out})
-		case "logs":
-			text, err := readLogTail(cfg.Runtime.LogFile, 65536)
-			if err != nil {
-				fmt.Printf("logs failed: %v\n", err)
-				continue
-			}
-			fmt.Print(text)
-		case "quit", "exit":
-			_ = bridgeSvc.Stop()
+		out, quit, clear := state.Execute(ctx, scanner.Text())
+		if clear {
+			clearScreen()
+			continue
+		}
+		if strings.TrimSpace(out) != "" {
+			fmt.Println(out)
+		}
+		if quit {
 			return
-		default:
-			if strings.HasPrefix(strings.ToLower(line), "set ") {
-				parts := strings.SplitN(line, " ", 3)
-				if len(parts) != 3 {
-					fmt.Println("usage: set KEY VALUE")
-					continue
-				}
-				next := cfg
-				if err := setConfigValue(&next, parts[1], parts[2]); err != nil {
-					fmt.Printf("set failed: %v\n", err)
-					continue
-				}
-				if err := config.Save(configPath, next); err != nil {
-					fmt.Printf("save failed: %v\n", err)
-					continue
-				}
-				cfg = next
-				bridgeSvc.UpdateConfig(cfg)
-				fmt.Println("saved")
-				continue
-			}
-			fmt.Println("unknown command; type help")
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("cli input: %v", err)
 	}
-	_ = bridgeSvc.Stop()
+	_ = state.bridgeSvc.Stop()
+}
+
+func runInteractiveCLI(ctx context.Context, state *cliState) {
+	historyFile := filepath.Join(filepath.Dir(state.configPath), "runtime", "billbot.history")
+	if err := os.MkdirAll(filepath.Dir(historyFile), 0755); err != nil {
+		log.Printf("create history dir: %v", err)
+	}
+	rl, err := readline.NewEx(&readline.Config{
+		Prompt:          "billbot> ",
+		HistoryFile:     historyFile,
+		InterruptPrompt: "^C",
+		EOFPrompt:       "quit",
+	})
+	if err != nil {
+		log.Printf("readline unavailable: %v", err)
+		runREPL(ctx, state)
+		return
+	}
+	defer rl.Close()
+
+	fmt.Println("BillBot CLI")
+	fmt.Printf("config: %s\n", state.configPath)
+	fmt.Println(strings.TrimSpace(helpText()))
+	for {
+		line, err := rl.Readline()
+		if err == readline.ErrInterrupt {
+			fmt.Println("use quit to exit")
+			continue
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("cli input: %v", err)
+			break
+		}
+		out, quit, clear := state.Execute(ctx, line)
+		if clear {
+			clearScreen()
+			continue
+		}
+		if strings.TrimSpace(out) != "" {
+			fmt.Println(out)
+		}
+		if quit {
+			return
+		}
+	}
+	_ = state.bridgeSvc.Stop()
+}
+
+func (s *cliState) Execute(ctx context.Context, rawLine string) (output string, quit bool, clear bool) {
+	line := normalizeCLIInput(rawLine)
+	lower := strings.ToLower(line)
+	if lower == "" || lower == "help" || lower == "?" {
+		return helpText(), false, false
+	}
+	if lower == "clear" || lower == "cls" {
+		return "", false, true
+	}
+	if lower == "quit" || lower == "exit" {
+		_ = s.bridgeSvc.Stop()
+		return "bye", true, false
+	}
+
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+
+	switch lower {
+	case "status":
+		return formatJSON(map[string]any{
+			"bridge":  s.bridgeSvc.Status(),
+			"routing": routingSummary(cfg),
+		}), false, false
+	case "diag":
+		report := diagnostics.Run(ctx, cfg)
+		log.Printf("diagnostics napcat_http=%t napcat_ws=%t hermes_found=%t hermes_status=%t hermes_chat=%t", report.NapCat.HTTPReachable, report.NapCat.WSReachable, report.Hermes.CommandFound, report.Hermes.StatusOK, report.Hermes.ChatOK)
+		return formatJSON(map[string]any{"diagnostics": report}), false, false
+	case "route":
+		return formatJSON(map[string]any{"routing": routingSummary(cfg)}), false, false
+	case "route off", "routing off", "model default", "models default":
+		return s.disableRouting(), false, false
+	case "start":
+		if err := s.bridgeSvc.Start(); err != nil {
+			return "start failed: " + err.Error(), false, false
+		}
+		return formatJSON(map[string]any{"ok": true, "bridge": s.bridgeSvc.Status()}), false, false
+	case "stop":
+		if err := s.bridgeSvc.Stop(); err != nil {
+			return "stop failed: " + err.Error(), false, false
+		}
+		return formatJSON(map[string]any{"ok": true, "bridge": s.bridgeSvc.Status()}), false, false
+	case "logs":
+		text, err := readLogTail(cfg.Runtime.LogFile, 65536)
+		if err != nil {
+			return "logs failed: " + err.Error(), false, false
+		}
+		return text, false, false
+	}
+
+	if strings.HasPrefix(lower, "set ") {
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) != 3 {
+			return "usage: set KEY VALUE", false, false
+		}
+		return s.setValue(parts[1], parts[2]), false, false
+	}
+	if key, value, ok := simpleSet(line); ok {
+		return s.setValue(key, value), false, false
+	}
+	return "unknown command; type help", false, false
+}
+
+func simpleSet(line string) (string, string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	switch strings.ToLower(parts[0]) {
+	case "qq", "self_id", "admin", "owner", "token", "http_token", "ws_token", "http", "ws", "hermes":
+		return parts[0], parts[1], true
+	default:
+		return "", "", false
+	}
+}
+
+func (s *cliState) setValue(key string, value string) string {
+	s.mu.Lock()
+	next := s.cfg
+	s.mu.Unlock()
+	if err := setConfigValue(&next, key, value); err != nil {
+		return "set failed: " + err.Error()
+	}
+	if err := config.Save(s.configPath, next); err != nil {
+		return "save failed: " + err.Error()
+	}
+	s.mu.Lock()
+	s.cfg = next
+	s.mu.Unlock()
+	s.bridgeSvc.UpdateConfig(next)
+	return "saved " + canonicalConfigKey(key)
+}
+
+func (s *cliState) disableRouting() string {
+	s.mu.Lock()
+	next := s.cfg
+	s.mu.Unlock()
+	next.Models.DefaultProvider = ""
+	next.Models.DefaultModel = ""
+	next.Models.BaseProvider = ""
+	next.Models.BaseModel = ""
+	next.Models.StrongProvider = ""
+	next.Models.StrongModel = ""
+	next.Models.SpecialModel = ""
+	if err := config.Save(s.configPath, next); err != nil {
+		return "save failed: " + err.Error()
+	}
+	s.mu.Lock()
+	s.cfg = next
+	s.mu.Unlock()
+	s.bridgeSvc.UpdateConfig(next)
+	return "routing disabled; Hermes default model will be used"
+}
+
+func helpText() string {
+	return strings.TrimSpace(`Commands:
+  start / stop          start or stop bridge
+  status                show bridge and routing status
+  diag                  test NapCat HTTP/WS and Hermes
+  route                 show Hermes routing config
+  route off             clear model overrides and use Hermes default model
+  logs                  show recent log tail
+  clear                 clear the screen
+  set qq <bot_qq>       save bridge self QQ number
+  set admin <qq>        save admin/owner QQ number
+  set token <token>     save the same NapCat token for HTTP and WS
+  set http_token <tok>  save only NapCat HTTP token
+  set ws_token <tok>    save only NapCat WS token
+  set http <url>        save NapCat HTTP endpoint
+  set ws <url>          save NapCat WS endpoint
+  set hermes <command>  save Hermes command
+  set KEY VALUE         save any supported config key
+  qq <bot_qq>           shortcut for set qq
+  admin <qq>            shortcut for set admin
+  token <token>         shortcut for set token
+  quit                  exit
+
+Keys: Up/Down history. Use clear to clear screen. Paste with your terminal shortcut, usually Ctrl+Shift+V or right click.`)
+}
+
+func clearScreen() {
+	fmt.Print("\033[H\033[2J")
+}
+
+func formatJSON(v any) string {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err.Error()
+	}
+	return string(b)
+}
+
+func routingSummary(cfg config.Config) map[string]any {
+	return map[string]any{
+		"hermes_command":       cfg.Hermes.Command,
+		"default_provider":     cfg.Models.DefaultProvider,
+		"default_model":        cfg.Models.DefaultModel,
+		"base_provider":        cfg.Models.BaseProvider,
+		"base_model":           cfg.Models.BaseModel,
+		"strong_provider":      cfg.Models.StrongProvider,
+		"strong_model":         cfg.Models.StrongModel,
+		"special_model":        cfg.Models.SpecialModel,
+		"routing_timeout_sec":  cfg.Models.RoutingTimeoutSec,
+		"flash_timeout_sec":    cfg.Models.FlashTimeoutSec,
+		"heavy_timeout_sec":    cfg.Models.HeavyTimeoutSec,
+		"routing_enabled":      cfg.Models.BaseProvider != "" || cfg.Models.BaseModel != "",
+		"strong_route_enabled": (cfg.Models.BaseProvider != "" || cfg.Models.BaseModel != "") && (cfg.Models.StrongProvider != "" || cfg.Models.StrongModel != ""),
+	}
 }
 
 func normalizeCLIInput(text string) string {
 	text = strings.TrimPrefix(text, "\ufeff")
 	text = strings.ReplaceAll(text, "\x00", "")
 	return strings.TrimSpace(text)
-}
-
-func printJSON(v any) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println(string(b))
 }
 
 func readLogTail(path string, maxBytes int64) (string, error) {
@@ -476,13 +431,31 @@ func readLogTail(path string, maxBytes int64) (string, error) {
 }
 
 func setConfigValue(cfg *config.Config, key string, value string) error {
-	switch strings.ToLower(strings.TrimSpace(key)) {
+	key = canonicalConfigKey(key)
+	value = normalizeSetValue(value)
+	switch key {
 	case "napcat.http":
 		cfg.NapCat.HTTP = value
 	case "napcat.ws":
 		cfg.NapCat.WS = value
+	case "napcat.access_token":
+		cfg.NapCat.AccessToken = value
+	case "napcat.token":
+		cfg.NapCat.AccessToken = value
+		cfg.NapCat.HTTPToken = value
+		cfg.NapCat.WSToken = value
+	case "napcat.http_token":
+		cfg.NapCat.HTTPToken = value
+	case "napcat.ws_token":
+		cfg.NapCat.WSToken = value
 	case "hermes.command":
 		cfg.Hermes.Command = value
+	case "hermes.persistent":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Hermes.Persistent = v
 	case "models.default_provider":
 		cfg.Models.DefaultProvider = value
 	case "models.default_model":
@@ -515,6 +488,12 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 			return err
 		}
 		cfg.Models.HeavyTimeoutSec = v
+	case "owners", "admin", "owner":
+		owners, err := parseInt64List(value)
+		if err != nil {
+			return err
+		}
+		cfg.Owners = owners
 	case "runtime.start_notice_delay_sec":
 		v, err := parsePositiveInt(value)
 		if err != nil {
@@ -533,10 +512,6 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 			return err
 		}
 		cfg.Runtime.MaxTurns = v
-	case "login.qr_command":
-		cfg.Login.QRCommand = strings.Fields(value)
-	case "login.status_command":
-		cfg.Login.StatusCommand = strings.Fields(value)
 	case "processes.napcat.command":
 		cfg.Processes.NapCat.Command = value
 	case "processes.napcat.args":
@@ -601,19 +576,46 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 			return err
 		}
 		cfg.Security.AllowNonOwnerSensitive = v
-	case "autostart.enabled":
-		v, err := strconv.ParseBool(value)
-		if err != nil {
-			return err
-		}
-		cfg.Autostart.Enabled = v
-	case "autostart.name":
-		cfg.Autostart.Name = value
 	default:
 		return fmt.Errorf("unsupported config key %q", key)
 	}
 	cfg.Normalize()
 	return nil
+}
+
+func normalizeSetValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	switch strings.ToLower(trimmed) {
+	case `""`, "''", "null", "none", "default", "-":
+		return ""
+	default:
+		return value
+	}
+}
+
+func canonicalConfigKey(key string) string {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "qq", "self_id", "bot", "bot_qq":
+		return "bridge.self_id"
+	case "admin", "owner":
+		return "admin"
+	case "token", "napcat.token":
+		return "napcat.token"
+	case "access_token":
+		return "napcat.access_token"
+	case "http_token", "napcat.http_token":
+		return "napcat.http_token"
+	case "ws_token", "napcat.ws_token":
+		return "napcat.ws_token"
+	case "http", "napcat_http":
+		return "napcat.http"
+	case "ws", "napcat_ws":
+		return "napcat.ws"
+	case "hermes":
+		return "hermes.command"
+	default:
+		return strings.ToLower(strings.TrimSpace(key))
+	}
 }
 
 func parsePositiveInt(value string) (int, error) {
@@ -627,32 +629,24 @@ func parsePositiveInt(value string) (int, error) {
 	return v, nil
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, err error) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": err.Error()})
-}
-
-func defaultWebDir() string {
-	if v := os.Getenv("BILLBOT_WEB_DIR"); v != "" {
-		return v
-	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Join(filepath.Dir(exe), "web")
-		if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-			return dir
+func parseInt64List(value string) ([]int64, error) {
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n'
+	})
+	var out []int64
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
 		}
-	}
-	if wd, err := os.Getwd(); err == nil {
-		dir := filepath.Join(wd, "web")
-		if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-			return dir
+		v, err := strconv.ParseInt(field, 10, 64)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, v)
 	}
-	return "web"
+	if len(out) == 0 {
+		return nil, fmt.Errorf("at least one qq number is required")
+	}
+	return out, nil
 }

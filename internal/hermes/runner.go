@@ -35,6 +35,7 @@ type Options struct {
 	Model                 string
 	Provider              string
 	SessionID             string
+	Persistent            bool
 	DisableToolsInSandbox bool
 	SecurityMode          string
 }
@@ -44,6 +45,7 @@ func OptionsFromConfig(cfg config.Config) Options {
 	return Options{
 		Model:                 model,
 		Provider:              cfg.Models.DefaultProvider,
+		Persistent:            cfg.Hermes.Persistent,
 		DisableToolsInSandbox: cfg.Hermes.DisableToolsInSandbox,
 		SecurityMode:          cfg.Security.Mode,
 	}
@@ -55,6 +57,12 @@ func (r Runner) AskWithOptions(ctx context.Context, prompt string, opts Options)
 }
 
 func (r Runner) AskWithSession(ctx context.Context, prompt string, opts Options) (string, string, error) {
+	if opts.Persistent {
+		reply, sessionID, err := askPersistentACP(ctx, r.Command, prompt, opts)
+		if err == nil {
+			return reply, sessionID, nil
+		}
+	}
 	args := BuildArgs(prompt, opts)
 	cmd := exec.CommandContext(ctx, r.Command, args...)
 	if runtime.GOOS == "windows" {
@@ -141,16 +149,15 @@ func runWithIdleOutput(ctx context.Context, cmd *exec.Cmd, idleTimeout time.Dura
 			timer.Reset(idleTimeout)
 		case <-timer.C:
 			if seenOutput {
-				killProcess(cmd)
-				err := <-done
-				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					err = nil
-				}
 				text, sessionID := cleanOutput(outputString(&mu, &out))
 				if text != "" {
+					killProcess(cmd)
+					err := <-done
+					if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+						err = nil
+					}
 					return text, sessionID, nil
 				}
-				return text, sessionID, err
 			}
 			timer.Reset(idleTimeout)
 		case <-ctx.Done():
@@ -189,7 +196,15 @@ func cleanOutput(text string) (string, string) {
 			sessionID = strings.TrimSpace(strings.TrimPrefix(trimmed, "session_id:"))
 			continue
 		}
+		if isHermesStatusLine(trimmed) {
+			continue
+		}
 		lines = append(lines, line)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n")), sessionID
+}
+
+func isHermesStatusLine(line string) bool {
+	return strings.Contains(line, "Resumed session ") ||
+		strings.HasPrefix(line, "Resumed session ")
 }

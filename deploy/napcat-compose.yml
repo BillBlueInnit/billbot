@@ -1,0 +1,13 @@
+services:
+  napcat:
+    image: lmq8267/napcat:v4.18.5
+    container_name: billbot-napcat
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "6099:6099"
+    volumes:
+      - ./runtime/napcat/qq:/app/.config/QQ
+      - ./runtime/napcat/config:/app/napcat/config
+      - ./runtime/napcat/plugins:/app/napcat/plugins

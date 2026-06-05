@@ -16,6 +16,7 @@ type Message struct {
 	GroupID  string   `json:"group_id,omitempty"`
 	Private  bool     `json:"private"`
 	Text     string   `json:"text"`
+	Mention  bool     `json:"mention,omitempty"`
 	Raw      []byte   `json:"raw,omitempty"`
 }
 
@@ -35,4 +36,8 @@ type Connector interface {
 	Start(onMessage func(Message)) error
 	Stop() error
 	Send(chatID string, text string) error
+}
+
+type FileSender interface {
+	SendFile(chatID string, filePath string, name string) error
 }

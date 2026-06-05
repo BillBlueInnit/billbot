@@ -50,6 +50,7 @@ node_modules/
 .npm/
 .yarn/
 .cache/
+.gocache/
 
 # Go workspace/cache local files
 go.work

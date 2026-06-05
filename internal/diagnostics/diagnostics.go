@@ -4,8 +4,6 @@ package diagnostics
 
 import (
 	"context"
-	"net"
-	"net/url"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,6 +21,9 @@ type Report struct {
 type NapCatReport struct {
 	HTTPReachable bool   `json:"http_reachable"`
 	WSReachable   bool   `json:"ws_reachable"`
+	Source        string `json:"source,omitempty"`
+	HTTP          string `json:"http,omitempty"`
+	WS            string `json:"ws,omitempty"`
 	StatusMessage string `json:"status_message,omitempty"`
 }
 
@@ -41,30 +42,15 @@ func Run(ctx context.Context, cfg config.Config) Report {
 }
 
 func checkNapCat(ctx context.Context, cfg config.Config) NapCatReport {
-	conn := napcat.New(cfg.NapCat)
-	status, _ := conn.Status()
-	out := NapCatReport{
-		HTTPReachable: status.Connected,
-		StatusMessage: status.Message,
+	found := napcat.Detect(ctx, cfg.NapCat)
+	return NapCatReport{
+		HTTPReachable: found.HTTPReachable,
+		WSReachable:   found.WSReachable,
+		Source:        found.Source,
+		HTTP:          found.Config.HTTP,
+		WS:            found.Config.WS,
+		StatusMessage: found.Message,
 	}
-	wsURL, err := url.Parse(cfg.NapCat.WS)
-	if err == nil && (wsURL.Scheme == "ws" || wsURL.Scheme == "wss") {
-		host := wsURL.Host
-		if !strings.Contains(host, ":") {
-			if wsURL.Scheme == "wss" {
-				host += ":443"
-			} else {
-				host += ":80"
-			}
-		}
-		dialer := net.Dialer{Timeout: 2 * time.Second}
-		conn, err := dialer.DialContext(ctx, "tcp", host)
-		if err == nil {
-			out.WSReachable = true
-			_ = conn.Close()
-		}
-	}
-	return out
 }
 
 func checkHermes(ctx context.Context, cfg config.Config) HermesReport {

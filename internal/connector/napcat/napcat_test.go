@@ -3,7 +3,9 @@
 package napcat
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,6 +114,96 @@ func TestStatusReturnsDisconnectedWhenNapCatUnavailable(t *testing.T) {
 	}
 	if status.Message == "" {
 		t.Fatal("status message is empty")
+	}
+}
+
+func TestStatusUsesAccessToken(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	conn := New(config.NapCatConfig{HTTP: server.URL, WS: "ws://127.0.0.1:1", AccessToken: "secret"})
+	status, err := conn.Status()
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !status.Connected {
+		t.Fatalf("status = %#v, want connected", status)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Fatalf("Authorization = %q, want Bearer secret", gotAuth)
+	}
+}
+
+func TestStatusPrefersHTTPToken(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	conn := New(config.NapCatConfig{HTTP: server.URL, WS: "ws://127.0.0.1:1", AccessToken: "legacy", HTTPToken: "http-secret"})
+	status, err := conn.Status()
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !status.Connected {
+		t.Fatalf("status = %#v, want connected", status)
+	}
+	if gotAuth != "Bearer http-secret" {
+		t.Fatalf("Authorization = %q, want Bearer http-secret", gotAuth)
+	}
+}
+
+func TestWSURLWithToken(t *testing.T) {
+	got := wsURLWithToken("ws://127.0.0.1:3001", "secret")
+	if got != "ws://127.0.0.1:3001?access_token=secret" {
+		t.Fatalf("wsURLWithToken = %q", got)
+	}
+}
+
+func TestEffectiveWSTokenPrefersWSToken(t *testing.T) {
+	cfg := config.NapCatConfig{AccessToken: "legacy", WSToken: "ws-secret"}
+	got := wsURLWithToken("ws://127.0.0.1:3001", cfg.EffectiveWSToken())
+	if got != "ws://127.0.0.1:3001?access_token=ws-secret" {
+		t.Fatalf("wsURLWithToken = %q", got)
+	}
+}
+
+func TestDetectReturnsReachableConfiguredEndpoint(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/get_status" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer httpServer.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	found := Detect(context.Background(), config.NapCatConfig{
+		HTTP: httpServer.URL,
+		WS:   "ws://" + listener.Addr().String(),
+	})
+	if !found.HTTPReachable || !found.WSReachable {
+		t.Fatalf("detect = %#v, want both reachable", found)
+	}
+	if found.Source != "configured" {
+		t.Fatalf("source = %q, want configured", found.Source)
 	}
 }
 

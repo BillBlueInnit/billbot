@@ -13,6 +13,33 @@ import (
 
 func TestSetConfigValue(t *testing.T) {
 	cfg := config.Default()
+	if err := setConfigValue(&cfg, "qq", "123456"); err != nil {
+		t.Fatalf("set qq alias: %v", err)
+	}
+	if cfg.Bridge.SelfID != 123456 {
+		t.Fatalf("self id = %d", cfg.Bridge.SelfID)
+	}
+	if err := setConfigValue(&cfg, "token", "secret"); err != nil {
+		t.Fatalf("set token alias: %v", err)
+	}
+	if cfg.NapCat.AccessToken != "secret" || cfg.NapCat.HTTPToken != "secret" || cfg.NapCat.WSToken != "secret" {
+		t.Fatalf("tokens = access:%q http:%q ws:%q", cfg.NapCat.AccessToken, cfg.NapCat.HTTPToken, cfg.NapCat.WSToken)
+	}
+	if err := setConfigValue(&cfg, "http_token", "http-secret"); err != nil {
+		t.Fatalf("set http token alias: %v", err)
+	}
+	if err := setConfigValue(&cfg, "ws_token", "ws-secret"); err != nil {
+		t.Fatalf("set ws token alias: %v", err)
+	}
+	if cfg.NapCat.HTTPToken != "http-secret" || cfg.NapCat.WSToken != "ws-secret" {
+		t.Fatalf("split tokens = http:%q ws:%q", cfg.NapCat.HTTPToken, cfg.NapCat.WSToken)
+	}
+	if err := setConfigValue(&cfg, "admin", "10001,10002"); err != nil {
+		t.Fatalf("set admin alias: %v", err)
+	}
+	if len(cfg.Owners) != 2 || cfg.Owners[0] != 10001 || cfg.Owners[1] != 10002 {
+		t.Fatalf("owners = %#v", cfg.Owners)
+	}
 	if err := setConfigValue(&cfg, "models.strong_model", "strong"); err != nil {
 		t.Fatalf("set strong model: %v", err)
 	}
@@ -30,12 +57,6 @@ func TestSetConfigValue(t *testing.T) {
 	}
 	if !cfg.Bridge.Enabled {
 		t.Fatal("bridge.enabled not set")
-	}
-	if err := setConfigValue(&cfg, "login.qr_command", "printf https://example.test/qr"); err != nil {
-		t.Fatalf("set qr command: %v", err)
-	}
-	if len(cfg.Login.QRCommand) != 2 || cfg.Login.QRCommand[0] != "printf" {
-		t.Fatalf("qr command = %#v", cfg.Login.QRCommand)
 	}
 	if err := setConfigValue(&cfg, "models.routing_timeout_sec", "12"); err != nil {
 		t.Fatalf("set routing timeout: %v", err)
@@ -58,17 +79,11 @@ func TestSetConfigValue(t *testing.T) {
 	if err := setConfigValue(&cfg, "models.heavy_timeout_sec", "0"); err == nil {
 		t.Fatal("expected invalid positive integer error")
 	}
-	if err := setConfigValue(&cfg, "autostart.enabled", "true"); err != nil {
-		t.Fatalf("set autostart enabled: %v", err)
+	if err := setConfigValue(&cfg, "models.strong_model", `""`); err != nil {
+		t.Fatalf("clear strong model: %v", err)
 	}
-	if !cfg.Autostart.Enabled {
-		t.Fatal("autostart.enabled not set")
-	}
-	if err := setConfigValue(&cfg, "autostart.name", "BillBot Test"); err != nil {
-		t.Fatalf("set autostart name: %v", err)
-	}
-	if cfg.Autostart.Name != "BillBot Test" {
-		t.Fatalf("autostart name = %q", cfg.Autostart.Name)
+	if cfg.Models.StrongModel != "" {
+		t.Fatalf("strong model was not cleared: %q", cfg.Models.StrongModel)
 	}
 }
 
@@ -90,6 +105,25 @@ func TestNormalizeCLIInput(t *testing.T) {
 	got := normalizeCLIInput("\ufeffs\x00t\x00a\x00t\x00u\x00s\x00\r\n")
 	if got != "status" {
 		t.Fatalf("normalized input = %q", got)
+	}
+}
+
+func TestSimpleSet(t *testing.T) {
+	key, value, ok := simpleSet("token abc def")
+	if !ok || key != "token" || value != "abc def" {
+		t.Fatalf("simple set token = key=%q value=%q ok=%t", key, value, ok)
+	}
+	key, value, ok = simpleSet("qq 123456")
+	if !ok || key != "qq" || value != "123456" {
+		t.Fatalf("simple set qq = key=%q value=%q ok=%t", key, value, ok)
+	}
+	key, value, ok = simpleSet("ws_token ws-secret")
+	if !ok || key != "ws_token" || value != "ws-secret" {
+		t.Fatalf("simple set ws token = key=%q value=%q ok=%t", key, value, ok)
+	}
+	key, value, ok = simpleSet("admin 10001")
+	if !ok || key != "admin" || value != "10001" {
+		t.Fatalf("simple set admin = key=%q value=%q ok=%t", key, value, ok)
 	}
 }
 

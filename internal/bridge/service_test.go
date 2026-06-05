@@ -18,6 +18,7 @@ import (
 
 	"billbot/internal/config"
 	"billbot/internal/connector"
+	"billbot/internal/connector/napcat"
 	"billbot/internal/state"
 
 	"github.com/gorilla/websocket"
@@ -65,9 +66,16 @@ func (f *fakeConnector) Send(chatID string, text string) error {
 	return nil
 }
 
+func allowNapCatDetect(svc *Service) {
+	svc.detectNapCat = func(ctx context.Context, cfg config.NapCatConfig) napcat.Discovery {
+		return napcat.Discovery{Config: cfg, Source: "test", HTTPReachable: true, WSReachable: true}
+	}
+}
+
 func TestServiceStartStopIsIdempotent(t *testing.T) {
 	fake := &fakeConnector{}
 	svc := NewService(config.Default())
+	allowNapCatDetect(svc)
 	svc.connectorMaker = func(config.Config) connector.Connector {
 		return fake
 	}
@@ -351,6 +359,123 @@ func TestServiceBlocksFullModeForNonOwner(t *testing.T) {
 	}
 }
 
+func TestServiceAdminCanUpdateIdentity(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Owners = []int64{10001}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	svc := NewService(cfg)
+	svc.SetConfigPath(path)
+	svc.conn = fake
+	svc.running = true
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		if !strings.Contains(msg.Text, "Rewrite the following identity/persona") {
+			t.Fatalf("unexpected normalize prompt: %s", msg.Text)
+		}
+		return "Act as a secure group-chat coding assistant.", "", nil
+	}
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		ChatID:   "private:10001",
+		UserID:   "10001",
+		Private:  true,
+		Text:     "/identity 你是安全的群聊代码助手",
+	})
+
+	if len(fake.sent) != 1 || !strings.Contains(fake.sent[0].text, "Act as a secure group-chat coding assistant.") {
+		t.Fatalf("unexpected admin reply: %#v", fake.sent)
+	}
+	saved, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load saved config: %v", err)
+	}
+	if saved.Prompt.Identity != "Act as a secure group-chat coding assistant." {
+		t.Fatalf("identity = %q", saved.Prompt.Identity)
+	}
+}
+
+func TestServiceAdminCanUpdateIdentityWithoutSlash(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Owners = []int64{10001}
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		return "Act as a secure group-chat coding assistant.", "", nil
+	}
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		ChatID:   "private:10001",
+		UserID:   "10001",
+		Private:  true,
+		Text:     "identity 你是安全的群聊代码助手",
+	})
+
+	if len(fake.sent) != 1 || !strings.Contains(fake.sent[0].text, "Act as a secure group-chat coding assistant.") {
+		t.Fatalf("unexpected admin reply: %#v", fake.sent)
+	}
+}
+
+func TestServiceNonAdminCannotUseShell(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Owners = []int64{10001}
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		ChatID:   "private:20002",
+		UserID:   "20002",
+		Private:  true,
+		Text:     "/shell echo should-not-run",
+	})
+
+	if len(fake.sent) != 1 || !strings.Contains(fake.sent[0].text, "Only admin") {
+		t.Fatalf("unexpected shell rejection: %#v", fake.sent)
+	}
+}
+
+func TestServiceHelpDoesNotRequireAdmin(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Owners = []int64{10001}
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+	called := false
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		called = true
+		return "should not happen", "", nil
+	}
+
+	svc.handleMessage(connector.Message{
+		Platform: connector.PlatformQQ,
+		ChatID:   "private:20002",
+		UserID:   "20002",
+		Private:  true,
+		Text:     "/help",
+	})
+
+	if called {
+		t.Fatal("help reached Hermes")
+	}
+	if len(fake.sent) != 1 || !strings.Contains(fake.sent[0].text, "BillBot QQ commands") {
+		t.Fatalf("unexpected help reply: %#v", fake.sent)
+	}
+}
+
 func TestServiceRoutesBaseAnswerDirectly(t *testing.T) {
 	cfg := config.Default()
 	cfg.Runtime.DataDir = t.TempDir()
@@ -472,11 +597,22 @@ func TestServiceSendsProgressForSlowWork(t *testing.T) {
 	for _, sent := range fake.sent {
 		texts = append(texts, sent.text)
 	}
-	if !slices.Contains(texts, "BillBot is working on this request.") {
+	if !slices.Contains(texts, "\u5f00\u59cb\u63a8\u7406...") {
 		t.Fatalf("progress message missing: %#v", texts)
 	}
 	if !slices.Contains(texts, "done") {
 		t.Fatalf("final reply missing: %#v", texts)
+	}
+}
+
+func TestServiceMentionsSenderWhenQueueIsLong(t *testing.T) {
+	msg := connector.Message{ChatID: "group:200", UserID: "10001", GroupID: "200", Private: false, Mention: true}
+	got := formatOutgoing(msg, "reply")
+	if got != "[CQ:at,qq=10001] reply" {
+		t.Fatalf("formatOutgoing = %q", got)
+	}
+	if got := formatOutgoing(connector.Message{ChatID: "group:200", UserID: "10001", Private: false}, "reply"); got != "reply" {
+		t.Fatalf("formatOutgoing without mention = %q", got)
 	}
 }
 
@@ -489,6 +625,7 @@ func TestServiceEndToEndWithMockNapCatAndHermes(t *testing.T) {
 	cfg.NapCat.HTTP = napcat.httpURL
 	cfg.NapCat.WS = napcat.wsURL
 	cfg.Hermes.Command = fakeHermesCommand(t)
+	cfg.Hermes.Persistent = false
 	cfg.Models.HeavyTimeoutSec = 5
 	cfg.Bridge.RespondToGroupMentionsOnly = false
 

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +39,13 @@ func (c *Connector) Platform() connector.Platform { return connector.PlatformQQ 
 func (c *Connector) Status() (connector.Status, error) {
 	status := connector.Status{Name: c.Name(), Platform: c.Platform()}
 	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(c.cfg.HTTP + "/get_status")
+	req, err := http.NewRequest(http.MethodGet, c.cfg.HTTP+"/get_status", nil)
+	if err != nil {
+		status.Message = err.Error()
+		return status, nil
+	}
+	authorize(req, c.cfg.EffectiveHTTPToken())
+	resp, err := client.Do(req)
 	if err != nil {
 		status.Message = err.Error()
 		return status, nil
@@ -60,7 +68,7 @@ func (c *Connector) Start(onMessage func(connector.Message)) error {
 	c.cancel = cancel
 	c.mu.Unlock()
 
-	ws, _, err := websocket.DefaultDialer.Dial(c.cfg.WS, nil)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURLWithToken(c.cfg.WS, c.cfg.EffectiveWSToken()), nil)
 	if err != nil {
 		c.mu.Lock()
 		if c.conn == nil {
@@ -127,6 +135,34 @@ func (c *Connector) SendGroup(groupID string, text string) error {
 	})
 }
 
+func (c *Connector) SendFile(chatID string, filePath string, name string) error {
+	if strings.TrimSpace(filePath) == "" {
+		return fmt.Errorf("file path is required")
+	}
+	if strings.TrimSpace(name) == "" {
+		name = filepath.Base(filePath)
+	}
+	if groupID, ok := strings.CutPrefix(chatID, "group:"); ok {
+		return c.postAction("/upload_group_file", map[string]any{
+			"group_id": asNumberOrString(groupID),
+			"file":     filePath,
+			"name":     name,
+		})
+	}
+	if privateID, ok := strings.CutPrefix(chatID, "private:"); ok {
+		return c.postAction("/upload_private_file", map[string]any{
+			"user_id": asNumberOrString(privateID),
+			"file":    filePath,
+			"name":    name,
+		})
+	}
+	return c.postAction("/upload_private_file", map[string]any{
+		"user_id": asNumberOrString(chatID),
+		"file":    filePath,
+		"name":    name,
+	})
+}
+
 func (c *Connector) readLoop(ctx context.Context, ws *websocket.Conn, onMessage func(connector.Message)) {
 	defer func() {
 		c.mu.Lock()
@@ -166,7 +202,13 @@ func (c *Connector) postAction(path string, payload map[string]any) error {
 		return err
 	}
 	client := http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(c.cfg.HTTP+path, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, c.cfg.HTTP+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	authorize(req, c.cfg.EffectiveHTTPToken())
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -176,6 +218,31 @@ func (c *Connector) postAction(path string, payload map[string]any) error {
 		return fmt.Errorf("napcat %s failed: http %d %s", path, resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	return nil
+}
+
+func authorize(req *http.Request, token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+}
+
+func wsURLWithToken(rawURL string, token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := parsed.Query()
+	if q.Get("access_token") == "" {
+		q.Set("access_token", token)
+	}
+	parsed.RawQuery = q.Encode()
+	return parsed.String()
 }
 
 func ParseMessageEvent(raw []byte) (connector.Message, bool) {

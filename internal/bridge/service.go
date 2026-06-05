@@ -6,7 +6,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,14 +34,24 @@ type Status struct {
 type Service struct {
 	mu             sync.Mutex
 	cfg            config.Config
+	configPath     string
 	conn           connector.Connector
 	connectorMaker func(config.Config) connector.Connector
+	detectNapCat   func(context.Context, config.NapCatConfig) napcat.Discovery
 	runHermes      func(context.Context, config.Config, connector.Message, string) (string, string, error)
 	processes      *process.Manager
 	sessions       *state.Store
 	sessionLocks   map[string]*sync.Mutex
+	messageQueue   chan connector.Message
+	workerCancel   context.CancelFunc
 	running        bool
 	lastError      string
+}
+
+func (s *Service) SetConfigPath(path string) {
+	s.mu.Lock()
+	s.configPath = path
+	s.mu.Unlock()
 }
 
 func NewService(cfg config.Config) *Service {
@@ -48,6 +61,7 @@ func NewService(cfg config.Config) *Service {
 	return &Service{
 		cfg:            cfg,
 		connectorMaker: defaultConnectorMaker,
+		detectNapCat:   napcat.Detect,
 		runHermes:      defaultRunHermes,
 		processes:      process.NewManager(),
 		sessions:       store,
@@ -72,16 +86,44 @@ func (s *Service) Start() error {
 		return nil
 	}
 	cfg := s.cfg
+	detectNapCat := s.detectNapCat
+	if detectNapCat == nil {
+		detectNapCat = napcat.Detect
+	}
+	found := detectNapCat(context.Background(), cfg.NapCat)
+	if found.HTTPReachable && found.WSReachable {
+		cfg.NapCat = found.Config
+		log.Printf("napcat detected source=%s http=%s ws=%s", found.Source, found.Config.HTTP, found.Config.WS)
+	} else {
+		err := fmt.Errorf("napcat OneBot is not ready: http=%s http_ok=%t ws=%s ws_ok=%t message=%s", found.Config.HTTP, found.HTTPReachable, found.Config.WS, found.WSReachable, found.Message)
+		log.Printf("napcat detection incomplete source=%s %v", found.Source, err)
+		s.running = false
+		s.conn = nil
+		s.lastError = err.Error()
+		s.mu.Unlock()
+		return err
+	}
 	conn := s.connectorMaker(cfg)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	queue := make(chan connector.Message, 64)
 	s.conn = conn
+	s.cfg = cfg
+	s.messageQueue = queue
+	s.workerCancel = workerCancel
 	s.running = true
 	s.lastError = ""
 	s.mu.Unlock()
+	go s.messageWorker(workerCtx, queue)
 
 	if err := s.processes.StartNapCat(context.Background(), cfg.Processes.NapCat); err != nil {
 		s.mu.Lock()
 		s.running = false
 		s.conn = nil
+		s.messageQueue = nil
+		if s.workerCancel != nil {
+			s.workerCancel()
+			s.workerCancel = nil
+		}
 		s.lastError = err.Error()
 		s.mu.Unlock()
 		return err
@@ -89,7 +131,7 @@ func (s *Service) Start() error {
 	log.Printf("bridge napcat readiness check completed")
 
 	if err := conn.Start(func(msg connector.Message) {
-		go s.handleMessage(msg)
+		s.enqueueMessage(msg)
 	}); err != nil {
 		s.mu.Lock()
 		s.running = false
@@ -105,9 +147,15 @@ func (s *Service) Start() error {
 func (s *Service) Stop() error {
 	s.mu.Lock()
 	conn := s.conn
+	cancel := s.workerCancel
 	s.conn = nil
+	s.messageQueue = nil
+	s.workerCancel = nil
 	s.running = false
 	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if conn != nil {
 		if err := conn.Stop(); err != nil {
 			return err
@@ -120,6 +168,42 @@ func (s *Service) Stop() error {
 	}
 	log.Printf("bridge stopped")
 	return nil
+}
+
+func (s *Service) enqueueMessage(msg connector.Message) {
+	s.mu.Lock()
+	queue := s.messageQueue
+	if queue != nil && !msg.Private && len(queue) >= 3 {
+		msg.Mention = true
+	}
+	s.mu.Unlock()
+	if queue == nil {
+		return
+	}
+	select {
+	case queue <- msg:
+	default:
+		s.setError("message queue is full")
+	}
+}
+
+func formatOutgoing(msg connector.Message, text string) string {
+	text = strings.TrimSpace(text)
+	if !msg.Mention || msg.Private || strings.TrimSpace(msg.UserID) == "" {
+		return text
+	}
+	return "[CQ:at,qq=" + msg.UserID + "] " + text
+}
+
+func (s *Service) messageWorker(ctx context.Context, queue <-chan connector.Message) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-queue:
+			s.handleMessage(msg)
+		}
+	}
 }
 
 func (s *Service) Status() Status {
@@ -183,6 +267,7 @@ func (s *Service) handleMessage(msg connector.Message) {
 
 	s.mu.Lock()
 	cfg := s.cfg
+	configPath := s.configPath
 	conn := s.conn
 	store := s.sessions
 	runHermes := s.runHermes
@@ -195,16 +280,22 @@ func (s *Service) handleMessage(msg connector.Message) {
 	defer unlock()
 
 	userID, _ := strconv.ParseInt(msg.UserID, 10, 64)
+	if handled, reply := s.handleAdminCommand(context.Background(), cfg, configPath, userID, msg.Text, runHermes); handled {
+		if strings.TrimSpace(reply) != "" {
+			_ = conn.Send(msg.ChatID, formatOutgoing(msg, reply))
+		}
+		return
+	}
 	if cfg.Security.Mode == "full" {
 		decision := security.CanUseFullEnvironment(cfg, userID)
 		if !decision.Allowed {
-			_ = conn.Send(msg.ChatID, "BillBot rejected the full environment request: "+decision.Reason)
+			_ = conn.Send(msg.ChatID, formatOutgoing(msg, "BillBot rejected the full environment request: "+decision.Reason))
 			return
 		}
 	}
 	decision := security.CanHandleSensitiveRequest(cfg, userID, msg.Text)
 	if !decision.Allowed {
-		_ = conn.Send(msg.ChatID, "BillBot rejected the sensitive request: "+decision.Reason)
+		_ = conn.Send(msg.ChatID, formatOutgoing(msg, "BillBot rejected the sensitive request: "+decision.Reason))
 		return
 	}
 
@@ -226,9 +317,338 @@ func (s *Service) handleMessage(msg connector.Message) {
 	if reply == "" {
 		return
 	}
-	if err := conn.Send(msg.ChatID, reply); err != nil {
+	if notice, sent := s.sendGeneratedFileIfRequested(cfg, conn, msg, reply); sent {
+		if strings.TrimSpace(notice) != "" {
+			_ = conn.Send(msg.ChatID, formatOutgoing(msg, notice))
+		}
+		return
+	}
+	if err := conn.Send(msg.ChatID, formatOutgoing(msg, reply)); err != nil {
 		s.setError(err.Error())
 	}
+}
+
+func (s *Service) sendGeneratedFileIfRequested(cfg config.Config, conn connector.Connector, msg connector.Message, reply string) (string, bool) {
+	if !wantsFile(msg.Text) {
+		return "", false
+	}
+	fileSender, ok := conn.(connector.FileSender)
+	if !ok {
+		return "", false
+	}
+	name, content, ok := firstCodeBlockFile(reply)
+	if !ok {
+		return "", false
+	}
+	if len(content) > 512*1024 {
+		return "generated file is too large to send", true
+	}
+	if err := os.MkdirAll(cfg.Runtime.OutboxDir, 0755); err != nil {
+		return "create outbox failed: " + err.Error(), true
+	}
+	name = safeFileName(name)
+	path := filepath.Join(cfg.Runtime.OutboxDir, time.Now().Format("20060102-150405")+"-"+name)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		return "write generated file failed: " + err.Error(), true
+	}
+	if err := fileSender.SendFile(msg.ChatID, path, name); err != nil {
+		return "send generated file failed: " + err.Error(), true
+	}
+	return "已生成并发送文件: " + name, true
+}
+
+func wantsFile(text string) bool {
+	lower := strings.ToLower(text)
+	for _, keyword := range []string{"文件", "发给我", "发送", "上传", "file", "attachment", "attach"} {
+		if strings.Contains(lower, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstCodeBlockFile(text string) (string, string, bool) {
+	start := strings.Index(text, "```")
+	if start < 0 {
+		return "", "", false
+	}
+	rest := text[start+3:]
+	headerEnd := strings.Index(rest, "\n")
+	if headerEnd < 0 {
+		return "", "", false
+	}
+	header := strings.TrimSpace(rest[:headerEnd])
+	rest = rest[headerEnd+1:]
+	end := strings.Index(rest, "```")
+	if end < 0 {
+		return "", "", false
+	}
+	content := strings.TrimSpace(rest[:end])
+	if content == "" {
+		return "", "", false
+	}
+	name := fileNameFromCode(header, content)
+	return name, content + "\n", true
+}
+
+func fileNameFromCode(header string, content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "//"), "#"))
+		lower := strings.ToLower(trimmed)
+		for _, prefix := range []string{"filename:", "file:"} {
+			if value, ok := strings.CutPrefix(lower, prefix); ok {
+				_ = value
+				original := strings.TrimSpace(trimmed[len(prefix):])
+				if original != "" {
+					return original
+				}
+			}
+		}
+		if trimmed != "" {
+			break
+		}
+	}
+	switch strings.ToLower(strings.Fields(header + " text")[0]) {
+	case "go", "golang":
+		return "main.go"
+	case "python", "py":
+		return "main.py"
+	case "javascript", "js":
+		return "script.js"
+	case "typescript", "ts":
+		return "script.ts"
+	case "html":
+		return "index.html"
+	case "css":
+		return "style.css"
+	case "json":
+		return "data.json"
+	case "yaml", "yml":
+		return "config.yaml"
+	case "toml":
+		return "config.toml"
+	case "bash", "sh", "shell":
+		return "script.sh"
+	default:
+		return "answer.txt"
+	}
+}
+
+func safeFileName(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		name = "answer.txt"
+	}
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "answer.txt"
+	}
+	return out
+}
+
+func (s *Service) handleAdminCommand(ctx context.Context, cfg config.Config, configPath string, userID int64, text string, runHermes func(context.Context, config.Config, connector.Message, string) (string, string, error)) (bool, string) {
+	name, args, ok := parseBuiltInCommand(text)
+	if !ok {
+		return false, ""
+	}
+	switch name {
+	case "help":
+		return true, qqHelpText()
+	case "identity", "style", "sandbox", "full", "shell":
+	default:
+		return false, ""
+	}
+	if (name == "identity" || name == "style") && strings.TrimSpace(args) == "" {
+		if name == "identity" {
+			return true, "identity: " + emptyDash(cfg.Prompt.Identity)
+		}
+		return true, "style: " + emptyDash(cfg.Prompt.Style)
+	}
+	if !isOwner(cfg.Owners, userID) {
+		return true, "Only admin can use /" + name + "."
+	}
+	next := cfg
+	switch name {
+	case "identity":
+		mode, value := identityModeAndValue(args)
+		normalized, err := normalizePromptText(ctx, cfg, "identity/persona", value, runHermes)
+		if err != nil {
+			return true, "identity normalize failed: " + err.Error()
+		}
+		if mode == "add" && strings.TrimSpace(next.Prompt.Identity) != "" {
+			next.Prompt.Identity = strings.TrimSpace(next.Prompt.Identity) + "\n" + normalized
+		} else {
+			next.Prompt.Identity = normalized
+		}
+		return true, s.saveRuntimeConfig(next, configPath, "identity updated:\n"+next.Prompt.Identity)
+	case "style":
+		mode, value := identityModeAndValue(args)
+		normalized, err := normalizePromptText(ctx, cfg, "style", value, runHermes)
+		if err != nil {
+			return true, "style normalize failed: " + err.Error()
+		}
+		if mode == "add" && strings.TrimSpace(next.Prompt.Style) != "" {
+			next.Prompt.Style = strings.TrimSpace(next.Prompt.Style) + "\n" + normalized
+		} else {
+			next.Prompt.Style = normalized
+		}
+		return true, s.saveRuntimeConfig(next, configPath, "style updated:\n"+next.Prompt.Style)
+	case "sandbox":
+		next.Security.Mode = "sandbox"
+		return true, s.saveRuntimeConfig(next, configPath, "security mode: sandbox")
+	case "full":
+		next.Security.Mode = "full"
+		next.Security.AllowFullForOwnersOnly = true
+		return true, s.saveRuntimeConfig(next, configPath, "security mode: full for admins only")
+	case "shell":
+		return true, runAdminShell(ctx, args)
+	default:
+		return false, ""
+	}
+}
+
+func qqHelpText() string {
+	return strings.TrimSpace(`BillBot QQ commands:
+/help - show this help
+identity - show current AI identity
+style - show current AI style
+
+Admin only:
+/identity <text> - rewrite as concise English prompt and replace identity
+/identity add <text> - rewrite and append identity
+/style <text> - rewrite as concise English prompt and replace style
+/style add <text> - rewrite and append style
+/sandbox - switch AI back to sandbox mode
+/full - allow admins to use full mode
+/shell <command> - run shell command as admin`)
+}
+
+func identityModeAndValue(args string) (string, string) {
+	args = strings.TrimSpace(args)
+	for _, prefix := range []string{"add ", "set "} {
+		if value, ok := strings.CutPrefix(args, prefix); ok {
+			mode := strings.TrimSpace(prefix)
+			if mode == "set" {
+				mode = "replace"
+			}
+			return mode, strings.TrimSpace(value)
+		}
+	}
+	return "replace", args
+}
+
+func normalizePromptText(ctx context.Context, cfg config.Config, kind string, text string, runHermes func(context.Context, config.Config, connector.Message, string) (string, string, error)) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("%s text is required", kind)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	prompt := "Rewrite the following " + kind + " description into a concise English system-prompt instruction for an AI assistant. Output only the final prompt text, one to three short sentences. Do not add markdown, labels, quotes, or explanations.\n\nDescription:\n" + text
+	normalizeCfg := cfg
+	normalizeCfg.Prompt.Identity = ""
+	normalizeCfg.Prompt.Style = ""
+	msg := connector.Message{Platform: connector.PlatformQQ, ChatID: "admin:identity", UserID: "admin", Private: true, Text: prompt}
+	reply, _, err := runHermes(runCtx, normalizeCfg, msg, "")
+	if err != nil {
+		return "", err
+	}
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return "", fmt.Errorf("empty normalized prompt")
+	}
+	if len(reply) > 1000 {
+		reply = reply[:1000]
+	}
+	return reply, nil
+}
+
+func parseBuiltInCommand(text string) (name string, args string, ok bool) {
+	text = stripLeadingAt(strings.TrimSpace(text))
+	text = strings.TrimPrefix(text, "/")
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	name = strings.ToLower(fields[0])
+	if len(fields) > 1 {
+		args = strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
+	}
+	return name, args, true
+}
+
+func stripLeadingAt(text string) string {
+	for {
+		trimmed := strings.TrimSpace(text)
+		if !strings.HasPrefix(trimmed, "[CQ:at,qq=") {
+			return trimmed
+		}
+		end := strings.Index(trimmed, "]")
+		if end < 0 {
+			return trimmed
+		}
+		text = trimmed[end+1:]
+	}
+}
+
+func (s *Service) saveRuntimeConfig(cfg config.Config, configPath string, reply string) string {
+	cfg.Normalize()
+	if strings.TrimSpace(configPath) != "" {
+		if err := config.Save(configPath, cfg); err != nil {
+			return "save config failed: " + err.Error()
+		}
+	}
+	s.UpdateConfig(cfg)
+	return reply
+}
+
+func emptyDash(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return "-"
+	}
+	return text
+}
+
+func isOwner(owners []int64, userID int64) bool {
+	for _, owner := range owners {
+		if owner == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func runAdminShell(ctx context.Context, command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "usage: /shell <command>"
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var cmd *exec.Cmd
+	if strings.Contains(strings.ToLower(runtime.GOOS), "windows") {
+		cmd = exec.CommandContext(runCtx, "cmd", "/C", command)
+	} else {
+		cmd = exec.CommandContext(runCtx, "/bin/sh", "-lc", command)
+	}
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if text == "" && err != nil {
+		text = err.Error()
+	}
+	if text == "" {
+		text = "OK"
+	}
+	if len(text) > 3500 {
+		text = text[:3500] + "\n...[truncated]"
+	}
+	return text
 }
 
 func (s *Service) handleCommandOrHermes(ctx context.Context, cfg config.Config, msg connector.Message, store *state.Store, sessionKey string, runHermes func(context.Context, config.Config, connector.Message, string) (string, string, error)) (string, error) {
@@ -329,11 +749,11 @@ func (s *Service) lockSession(key string) func() {
 func (s *Service) startProgress(ctx context.Context, cfg config.Config, conn connector.Connector, msg connector.Message) func() {
 	delay := time.Duration(cfg.Runtime.StartNoticeDelaySec) * time.Second
 	if delay <= 0 {
-		delay = 6 * time.Second
+		delay = 5 * time.Second
 	}
 	interval := time.Duration(cfg.Runtime.ProgressIntervalSec) * time.Second
 	if interval <= 0 {
-		interval = 25 * time.Second
+		interval = 30 * time.Second
 	}
 	done := make(chan struct{})
 	go func() {
@@ -345,7 +765,7 @@ func (s *Service) startProgress(ctx context.Context, cfg config.Config, conn con
 		case <-done:
 			return
 		case <-timer.C:
-			_ = conn.Send(msg.ChatID, "BillBot is working on this request.")
+			_ = conn.Send(msg.ChatID, formatOutgoing(msg, "\u5f00\u59cb\u63a8\u7406..."))
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -356,7 +776,7 @@ func (s *Service) startProgress(ctx context.Context, cfg config.Config, conn con
 			case <-done:
 				return
 			case <-ticker.C:
-				_ = conn.Send(msg.ChatID, "BillBot is still working.")
+				_ = conn.Send(msg.ChatID, formatOutgoing(msg, "\u6b63\u5728\u63a8\u7406..."))
 			}
 		}
 	}()
@@ -368,7 +788,6 @@ func (s *Service) startProgress(ctx context.Context, cfg config.Config, conn con
 		}
 	}
 }
-
 func (s *Service) shouldHandle(msg connector.Message) bool {
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {

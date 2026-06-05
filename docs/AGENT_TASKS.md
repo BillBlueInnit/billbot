@@ -34,26 +34,20 @@ Core security rule
 
 Current state
 - Go backend compiles
-- Static dashboard exists
+- Pure TUI is the default runtime
+- Dashboard and HTTP control API have been removed
 - Config load/save exists
-- /api/health exists
-- /api/config GET/POST exists
-- /api/connectors/status exists
-- /api/bridge/status exists
-- /api/bridge/start exists
-- /api/bridge/stop exists
 - NapCat connector checks status, receives OneBot WebSocket message events, and sends private/group replies through HTTP
 - Hermes runner supports `hermes chat -Q -q <prompt>`, optional model, and sandbox tool disabling
 - Bridge loop manages connector lifecycle, routes messages to Hermes, sends replies, and applies bridge-level security policy
 - Session state persists under `runtime.data_dir`
-- Dashboard can edit config, bridge settings, and dashboard-configured slash commands
+- TUI can edit key config values, bridge settings, and model routing values
 - Slash commands support prompt, skill prompt, and fixed-argv exec actions
 - Runtime requirements now include single executable startup, `--cli`, NapCat login QR handling, async per-session processing, Hermes session resume, model/API routing, progress feedback, and runtime logging.
 - QQ login QR/status support is implemented through operator-configured external argv arrays: `login.qr_command` and `login.status_command`. These commands may call a locally installed NapCat launcher or a supported local API path, but BillBot must not depend on NapCat WebUI and must not bundle NapCat artifacts.
 - NapCat process control is exposed through dashboard, CLI, and `/api/processes/napcat/*` using the user-configured local command only; BillBot still treats NapCat as external software.
 - CLI config editing now covers model routing timeout fields, special model, and runtime progress/session timing fields so routing/progress can be configured without a browser.
-- BillBot OS autostart can be managed from CLI, dashboard, and `/api/autostart/*`. Windows uses the current-user Registry Run key. Linux uses a systemd user service. Autostart controls BillBot only; NapCat still remains an external dependency controlled through `processes.napcat`.
-- OS autostart should launch BillBot in dashboard/bridge mode, not interactive `--cli` mode, even when configured from CLI.
+- OS autostart has been removed. Long-running deployment should use screen, tmux, supervisor, Docker, or a user-managed service outside BillBot.
 
 Verified commands
 

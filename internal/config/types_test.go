@@ -28,8 +28,17 @@ func TestNormalizeFillsV01Defaults(t *testing.T) {
 	if cfg.Security.Mode != "sandbox" {
 		t.Fatalf("security mode = %q, want sandbox", cfg.Security.Mode)
 	}
-	if cfg.Autostart.Name != "BillBot" {
-		t.Fatalf("autostart name = %q, want BillBot", cfg.Autostart.Name)
+}
+
+func TestNapCatEffectiveTokens(t *testing.T) {
+	cfg := NapCatConfig{AccessToken: "legacy"}
+	if cfg.EffectiveHTTPToken() != "legacy" || cfg.EffectiveWSToken() != "legacy" {
+		t.Fatalf("legacy token fallback failed: %#v", cfg)
+	}
+	cfg.HTTPToken = "http-secret"
+	cfg.WSToken = "ws-secret"
+	if cfg.EffectiveHTTPToken() != "http-secret" || cfg.EffectiveWSToken() != "ws-secret" {
+		t.Fatalf("split token preference failed: %#v", cfg)
 	}
 }
 
@@ -68,6 +77,57 @@ runtime:
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestLoadAndSaveTOML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	initial := []byte(`name = "toml-test"
+owners = [12345]
+
+[napcat]
+http = "http://127.0.0.1:3000"
+ws = "ws://127.0.0.1:3001"
+
+[bridge]
+enabled = true
+respond_to_group_mentions_only = true
+self_id = 67890
+
+[models]
+base_provider = "cheap"
+base_model = "fast-model"
+strong_provider = "strong"
+strong_model = "reasoning-model"
+`)
+	if err := os.WriteFile(path, initial, 0600); err != nil {
+		t.Fatalf("write toml: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load toml: %v", err)
+	}
+	if cfg.Name != "toml-test" || !cfg.Bridge.Enabled || cfg.Models.StrongModel != "reasoning-model" {
+		t.Fatalf("loaded cfg = %#v", cfg)
+	}
+	cfg.Models.RoutingTimeoutSec = 12
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("save toml: %v", err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved toml: %v", err)
+	}
+	text := string(out)
+	for _, want := range []string{
+		`name = "toml-test"`,
+		`routing_timeout_sec = 12`,
+		`[napcat]`,
+		`[models]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("saved toml missing %q:\n%s", want, text)
 		}
 	}
 }
