@@ -20,6 +20,17 @@ type Manager struct {
 	client    http.Client
 }
 
+type Status struct {
+	Managed     bool   `json:"managed"`
+	Running     bool   `json:"running"`
+	Ready       bool   `json:"ready"`
+	WaitHTTP    string `json:"wait_http,omitempty"`
+	LastPID     int    `json:"pid,omitempty"`
+	AutoStart   bool   `json:"auto_start"`
+	StopOnExit  bool   `json:"stop_on_exit"`
+	StatusError string `json:"status_error,omitempty"`
+}
+
 func NewManager() *Manager {
 	return &Manager{
 		processes: map[string]*exec.Cmd{},
@@ -75,6 +86,30 @@ func (m *Manager) StopNapCat() error {
 		return nil
 	}
 	return cmd.Process.Kill()
+}
+
+func (m *Manager) NapCatStatus(ctx context.Context, cfg config.ManagedProcessConfig) Status {
+	m.mu.Lock()
+	cmd := m.processes["napcat"]
+	m.mu.Unlock()
+
+	out := Status{
+		Managed:    cmd != nil,
+		WaitHTTP:   cfg.WaitHTTP,
+		AutoStart:  cfg.AutoStart,
+		StopOnExit: cfg.StopOnExit,
+	}
+	if cmd != nil && cmd.Process != nil {
+		out.Running = true
+		out.LastPID = cmd.Process.Pid
+	}
+	if cfg.WaitHTTP != "" {
+		out.Ready = m.httpReady(ctx, cfg.WaitHTTP)
+		if !out.Ready && out.Running {
+			out.StatusError = "managed process is running but readiness endpoint is not reachable"
+		}
+	}
+	return out
 }
 
 func (m *Manager) waitHTTP(parent context.Context, cfg config.ManagedProcessConfig) error {

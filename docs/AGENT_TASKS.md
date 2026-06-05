@@ -50,6 +50,7 @@ Current state
 - Slash commands support prompt, skill prompt, and fixed-argv exec actions
 - Runtime requirements now include single executable startup, `--cli`, NapCat login QR handling, async per-session processing, Hermes session resume, model/API routing, progress feedback, and runtime logging.
 - QQ login QR/status support is implemented through operator-configured external argv arrays: `login.qr_command` and `login.status_command`. These commands may call a locally installed NapCat launcher or a supported local API path, but BillBot must not depend on NapCat WebUI and must not bundle NapCat artifacts.
+- NapCat process control is exposed through dashboard, CLI, and `/api/processes/napcat/*` using the user-configured local command only; BillBot still treats NapCat as external software.
 
 Verified commands
 

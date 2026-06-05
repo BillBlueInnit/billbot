@@ -138,6 +138,35 @@ func (s *Service) Status() Status {
 	return out
 }
 
+func (s *Service) StartNapCatProcess(ctx context.Context) error {
+	s.mu.Lock()
+	cfg := s.cfg.Processes.NapCat
+	s.mu.Unlock()
+	cfg.AutoStart = true
+	if err := s.processes.StartNapCat(ctx, cfg); err != nil {
+		s.setError(err.Error())
+		return err
+	}
+	log.Printf("napcat process start requested")
+	return nil
+}
+
+func (s *Service) StopNapCatProcess() error {
+	if err := s.processes.StopNapCat(); err != nil {
+		s.setError(err.Error())
+		return err
+	}
+	log.Printf("napcat process stop requested")
+	return nil
+}
+
+func (s *Service) NapCatProcessStatus(ctx context.Context) process.Status {
+	s.mu.Lock()
+	cfg := s.cfg.Processes.NapCat
+	s.mu.Unlock()
+	return s.processes.NapCatStatus(ctx, cfg)
+}
+
 func (s *Service) handleMessage(msg connector.Message) {
 	defer func() {
 		if r := recover(); r != nil {

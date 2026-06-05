@@ -131,6 +131,35 @@ func main() {
 		}
 		writeJSON(w, map[string]any{"diagnostics": diagnostics.Run(r.Context(), cfg)})
 	})
+	mux.HandleFunc("/api/processes/napcat/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		writeJSON(w, map[string]any{"napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
+	})
+	mux.HandleFunc("/api/processes/napcat/start", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		if err := bridgeSvc.StartNapCatProcess(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
+	})
+	mux.HandleFunc("/api/processes/napcat/stop", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		if err := bridgeSvc.StopNapCatProcess(); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
+	})
 	mux.HandleFunc("/api/login/qr", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
@@ -195,7 +224,7 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 	fmt.Println("BillBot CLI")
 	fmt.Printf("config: %s\n", configPath)
 	fmt.Printf("dashboard port: %d\n", cfg.Server.Port)
-	fmt.Println("commands: status, diag, start, stop, qr, login, logs, set, help, quit")
+	fmt.Println("commands: status, diag, start, stop, napcat, napcat-start, napcat-stop, qr, login, logs, set, help, quit")
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("billbot> ")
@@ -209,6 +238,9 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 			fmt.Println("diag    run NapCat and Hermes diagnostics")
 			fmt.Println("start   start bridge and configured NapCat process")
 			fmt.Println("stop    stop bridge")
+			fmt.Println("napcat  show managed NapCat process status")
+			fmt.Println("napcat-start  start configured NapCat process")
+			fmt.Println("napcat-stop   stop managed NapCat process")
 			fmt.Println("qr      show QQ login QR availability")
 			fmt.Println("login   show QQ login status")
 			fmt.Println("logs    show recent runtime logs")
@@ -222,6 +254,20 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 			})
 		case "diag":
 			printJSON(map[string]any{"diagnostics": diagnostics.Run(ctx, cfg)})
+		case "napcat":
+			printJSON(map[string]any{"napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
+		case "napcat-start":
+			if err := bridgeSvc.StartNapCatProcess(ctx); err != nil {
+				fmt.Printf("napcat start failed: %v\n", err)
+				continue
+			}
+			printJSON(map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
+		case "napcat-stop":
+			if err := bridgeSvc.StopNapCatProcess(); err != nil {
+				fmt.Printf("napcat stop failed: %v\n", err)
+				continue
+			}
+			printJSON(map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
 		case "start":
 			if err := bridgeSvc.Start(); err != nil {
 				fmt.Printf("start failed: %v\n", err)
