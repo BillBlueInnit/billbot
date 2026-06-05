@@ -31,6 +31,10 @@ bridge:
   enabled: false
   respond_to_group_mentions_only: true
   self_id: 0
+login:
+  qr_command: []
+  qr_timeout_sec: 30
+  status_command: []
 hermes:
   command: hermes
   disable_tools_in_sandbox: true

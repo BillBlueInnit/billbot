@@ -7,13 +7,8 @@
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: #111318;
-      color: #eef2f7;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    main { width: min(1120px, calc(100% - 32px)); margin: 24px auto 48px; }
+    body { margin: 0; background: #111318; color: #eef2f7; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(1180px, calc(100% - 32px)); margin: 24px auto 48px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     h1, h2 { margin: 0; letter-spacing: 0; }
     h1 { font-size: 28px; }
@@ -23,40 +18,14 @@
     .wide { grid-column: 1 / -1; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
     label { display: block; margin: 12px 0 6px; color: #cbd5e1; font-size: 14px; }
-    input, textarea, select {
-      width: 100%;
-      padding: 10px;
-      border-radius: 6px;
-      border: 1px solid #46546b;
-      background: #0d1117;
-      color: #f8fafc;
-      font: inherit;
-    }
+    input, textarea, select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #46546b; background: #0d1117; color: #f8fafc; font: inherit; }
     textarea { min-height: 104px; resize: vertical; }
-    button {
-      min-height: 40px;
-      padding: 10px 14px;
-      border: 0;
-      border-radius: 6px;
-      background: #2f7d6d;
-      color: white;
-      cursor: pointer;
-      font-weight: 650;
-    }
+    button { min-height: 40px; padding: 10px 14px; border: 0; border-radius: 6px; background: #2f7d6d; color: white; cursor: pointer; font-weight: 650; }
     button.secondary { background: #334155; }
     button.danger { background: #9f3a3a; }
     button:disabled { opacity: .55; cursor: wait; }
     .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
-    .status {
-      margin: 12px 0 0;
-      min-height: 72px;
-      white-space: pre-wrap;
-      background: #0d1117;
-      padding: 12px;
-      border-radius: 6px;
-      border: 1px solid #303848;
-      overflow: auto;
-    }
+    .status { margin: 12px 0 0; min-height: 72px; white-space: pre-wrap; background: #0d1117; padding: 12px; border-radius: 6px; border: 1px solid #303848; overflow: auto; }
     .message { min-height: 22px; color: #a7f3d0; margin-top: 10px; }
     .hint { color: #94a3b8; font-size: 13px; margin-top: 8px; }
     @media (max-width: 780px) {
@@ -69,12 +38,12 @@
   <main>
     <header>
       <h1>BillBot Dashboard</h1>
-      <button id="refreshBtn" class="secondary">刷新状态</button>
+      <button id="refreshBtn" class="secondary">Refresh</button>
     </header>
 
     <div class="layout">
       <section class="panel">
-        <h2>服务状态</h2>
+        <h2>Service</h2>
         <pre id="health" class="status">loading...</pre>
       </section>
 
@@ -87,98 +56,111 @@
         <h2>Bridge</h2>
         <pre id="bridgeStatus" class="status">loading...</pre>
         <div class="actions">
-          <button id="startBridgeBtn">启动 Bridge</button>
-          <button id="stopBridgeBtn" class="danger">停止 Bridge</button>
+          <button id="startBridgeBtn">Start Bridge</button>
+          <button id="stopBridgeBtn" class="danger">Stop Bridge</button>
         </div>
       </section>
 
-      <section class="panel wide">
-        <h2>环境诊断</h2>
+      <section class="panel">
+        <h2>Diagnostics</h2>
         <pre id="diagnostics" class="status">not checked</pre>
         <div class="actions">
-          <button id="diagnosticsBtn" class="secondary">运行诊断</button>
+          <button id="diagnosticsBtn" class="secondary">Run Diagnostics</button>
         </div>
       </section>
 
       <section class="panel wide">
-        <h2>基础配置</h2>
+        <h2>Basic Config</h2>
         <div class="grid">
-          <div>
-            <label for="name">Bot name</label>
-            <input id="name" autocomplete="off" />
-          </div>
-          <div>
-            <label for="port">Dashboard port</label>
-            <input id="port" type="number" min="1" max="65535" />
-          </div>
-          <div>
-            <label for="napcat_http">NapCat HTTP</label>
-            <input id="napcat_http" autocomplete="off" />
-          </div>
-          <div>
-            <label for="napcat_ws">NapCat WebSocket</label>
-            <input id="napcat_ws" autocomplete="off" />
-          </div>
-          <div>
-            <label for="hermes_command">Hermes command</label>
-            <input id="hermes_command" autocomplete="off" />
-          </div>
-          <div>
-            <label for="self_id">Bot self QQ ID</label>
-            <input id="self_id" type="number" min="0" />
-          </div>
+          <div><label for="name">Bot name</label><input id="name" autocomplete="off" /></div>
+          <div><label for="port">Dashboard port</label><input id="port" type="number" min="1" max="65535" /></div>
+          <div><label for="napcat_http">NapCat HTTP</label><input id="napcat_http" autocomplete="off" /></div>
+          <div><label for="napcat_ws">NapCat WebSocket</label><input id="napcat_ws" autocomplete="off" /></div>
+          <div><label for="hermes_command">Hermes command</label><input id="hermes_command" autocomplete="off" /></div>
+          <div><label for="self_id">Bot self QQ ID</label><input id="self_id" type="number" min="0" /></div>
         </div>
         <label for="owners">Owners JSON array</label>
         <textarea id="owners" spellcheck="false"></textarea>
       </section>
 
-      <section class="panel">
-        <h2>模型</h2>
-        <label for="default_model">Default model</label>
-        <input id="default_model" autocomplete="off" />
-        <label for="special_model">Special model</label>
-        <input id="special_model" autocomplete="off" />
-      </section>
-
-      <section class="panel">
-        <h2>安全</h2>
-        <label for="mode">Security mode</label>
-        <select id="mode">
-          <option value="sandbox">sandbox</option>
-          <option value="full">full</option>
-        </select>
-        <label for="group_mentions_only">Group handling</label>
-        <select id="group_mentions_only">
-          <option value="true">only when mentioned</option>
-          <option value="false">all group messages</option>
-        </select>
-        <label for="disable_tools">Sandbox tools</label>
-        <select id="disable_tools">
-          <option value="true">disable tools in sandbox</option>
-          <option value="false">allow Hermes defaults</option>
-        </select>
+      <section class="panel wide">
+        <h2>NapCat Process</h2>
+        <div class="grid">
+          <div><label for="napcat_auto_start">Auto start</label><select id="napcat_auto_start"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="napcat_stop_on_exit">Stop on bridge stop</label><select id="napcat_stop_on_exit"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="napcat_command">Command</label><input id="napcat_command" autocomplete="off" /></div>
+          <div><label for="napcat_work_dir">Work dir</label><input id="napcat_work_dir" autocomplete="off" /></div>
+          <div><label for="napcat_wait_http">Wait HTTP</label><input id="napcat_wait_http" autocomplete="off" /></div>
+          <div><label for="napcat_wait_timeout">Wait timeout seconds</label><input id="napcat_wait_timeout" type="number" min="1" /></div>
+        </div>
+        <label for="napcat_args">Args JSON array</label>
+        <textarea id="napcat_args" spellcheck="false"></textarea>
       </section>
 
       <section class="panel wide">
-        <h2>Prompt</h2>
+        <h2>Model Routing</h2>
+        <div class="grid">
+          <div><label for="default_provider">Default provider</label><input id="default_provider" autocomplete="off" /></div>
+          <div><label for="default_model">Default model</label><input id="default_model" autocomplete="off" /></div>
+          <div><label for="base_provider">Base provider</label><input id="base_provider" autocomplete="off" /></div>
+          <div><label for="base_model">Base model</label><input id="base_model" autocomplete="off" /></div>
+          <div><label for="strong_provider">Strong provider</label><input id="strong_provider" autocomplete="off" /></div>
+          <div><label for="strong_model">Strong model</label><input id="strong_model" autocomplete="off" /></div>
+          <div><label for="special_model">Special model</label><input id="special_model" autocomplete="off" /></div>
+          <div><label for="routing_timeout">Routing timeout seconds</label><input id="routing_timeout" type="number" min="1" /></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Security</h2>
+        <label for="mode">Security mode</label>
+        <select id="mode"><option value="sandbox">sandbox</option><option value="full">full</option></select>
+        <label for="group_mentions_only">Group handling</label>
+        <select id="group_mentions_only"><option value="true">only when mentioned</option><option value="false">all group messages</option></select>
+        <label for="disable_tools">Sandbox tools</label>
+        <select id="disable_tools"><option value="true">disable tools in sandbox</option><option value="false">allow Hermes defaults</option></select>
+      </section>
+
+      <section class="panel">
+        <h2>QQ Login QR</h2>
+        <label for="qr_command">QR command JSON array</label>
+        <textarea id="qr_command" spellcheck="false"></textarea>
+        <label for="login_status_command">Status command JSON array</label>
+        <textarea id="login_status_command" spellcheck="false"></textarea>
+        <label for="qr_timeout">QR timeout seconds</label>
+        <input id="qr_timeout" type="number" min="1" />
+        <div class="actions">
+          <button id="qrBtn" class="secondary">Render QR</button>
+          <button id="loginStatusBtn" class="secondary">Login Status</button>
+        </div>
+        <pre id="qrOutput" class="status">not rendered</pre>
+      </section>
+
+      <section class="panel wide">
+        <h2>Prompt And Commands</h2>
         <label for="identity">Identity</label>
         <textarea id="identity"></textarea>
         <label for="style">Style</label>
         <textarea id="style"></textarea>
         <label for="commands">Commands JSON array</label>
         <textarea id="commands" spellcheck="false"></textarea>
-        <div class="actions">
-          <button id="saveBtn">保存配置</button>
-        </div>
+        <div class="actions"><button id="saveBtn">Save Config</button></div>
         <div id="message" class="message"></div>
-        <div class="hint">如果修改了 dashboard 端口，需要重启 BillBot 后新端口才会生效。</div>
+        <div class="hint">Changing the dashboard port requires restarting BillBot.</div>
+      </section>
+
+      <section class="panel wide">
+        <h2>Runtime Logs</h2>
+        <pre id="logs" class="status">not loaded</pre>
+        <div class="actions">
+          <button id="logsBtn" class="secondary">Load Logs</button>
+        </div>
       </section>
     </div>
   </main>
 
   <script>
     let current = null
-
     const el = id => document.getElementById(id)
 
     async function getJSON(url) {
@@ -188,21 +170,14 @@
     }
 
     async function postJSON(url, payload = {}) {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (!res.ok) throw new Error(await res.text())
       return res.json()
     }
 
     async function refresh() {
       const [health, cfg, connector, bridge] = await Promise.all([
-        getJSON('/api/health'),
-        getJSON('/api/config'),
-        getJSON('/api/connectors/status'),
-        getJSON('/api/bridge/status')
+        getJSON('/api/health'), getJSON('/api/config'), getJSON('/api/connectors/status'), getJSON('/api/bridge/status')
       ])
       current = cfg.config
       el('health').textContent = JSON.stringify(health, null, 2)
@@ -216,14 +191,31 @@
       el('hermes_command').value = current.hermes?.command || 'hermes'
       el('self_id').value = current.bridge?.self_id || 0
       el('owners').value = JSON.stringify(current.owners || [], null, 2)
+      el('default_provider').value = current.models?.default_provider || ''
       el('default_model').value = current.models?.default_model || ''
+      el('base_provider').value = current.models?.base_provider || ''
+      el('base_model').value = current.models?.base_model || ''
+      el('strong_provider').value = current.models?.strong_provider || ''
+      el('strong_model').value = current.models?.strong_model || ''
       el('special_model').value = current.models?.special_model || ''
+      el('routing_timeout').value = current.models?.routing_timeout_sec || 30
       el('identity').value = current.prompt?.identity || ''
       el('style').value = current.prompt?.style || ''
       el('commands').value = JSON.stringify(current.commands || [], null, 2)
       el('mode').value = current.security?.mode || 'sandbox'
       el('group_mentions_only').value = String(current.bridge?.respond_to_group_mentions_only ?? true)
       el('disable_tools').value = String(current.hermes?.disable_tools_in_sandbox ?? true)
+      el('qr_command').value = JSON.stringify(current.login?.qr_command || [], null, 2)
+      el('login_status_command').value = JSON.stringify(current.login?.status_command || [], null, 2)
+      el('qr_timeout').value = current.login?.qr_timeout_sec || 30
+      const proc = current.processes?.napcat || {}
+      el('napcat_auto_start').value = String(proc.auto_start ?? false)
+      el('napcat_stop_on_exit').value = String(proc.stop_on_exit ?? false)
+      el('napcat_command').value = proc.command || ''
+      el('napcat_work_dir').value = proc.work_dir || ''
+      el('napcat_wait_http').value = proc.wait_http || ''
+      el('napcat_wait_timeout').value = proc.wait_timeout_sec || 30
+      el('napcat_args').value = JSON.stringify(proc.args || [], null, 2)
     }
 
     async function saveConfig() {
@@ -233,9 +225,13 @@
       message.textContent = ''
       try {
         const owners = JSON.parse(el('owners').value || '[]')
-        if (!Array.isArray(owners)) throw new Error('owners must be a JSON array')
         const commands = JSON.parse(el('commands').value || '[]')
-        if (!Array.isArray(commands)) throw new Error('commands must be a JSON array')
+        const qrCommand = JSON.parse(el('qr_command').value || '[]')
+        const loginStatusCommand = JSON.parse(el('login_status_command').value || '[]')
+        const napcatArgs = JSON.parse(el('napcat_args').value || '[]')
+        if (!Array.isArray(owners) || !Array.isArray(commands) || !Array.isArray(qrCommand) || !Array.isArray(loginStatusCommand) || !Array.isArray(napcatArgs)) {
+          throw new Error('JSON array field is invalid')
+        }
         const payload = structuredClone(current || {})
         payload.name = el('name').value
         payload.server = payload.server || {}
@@ -243,15 +239,34 @@
         payload.napcat = payload.napcat || {}
         payload.napcat.http = el('napcat_http').value
         payload.napcat.ws = el('napcat_ws').value
+        payload.processes = payload.processes || {}
+        payload.processes.napcat = payload.processes.napcat || {}
+        payload.processes.napcat.auto_start = el('napcat_auto_start').value === 'true'
+        payload.processes.napcat.stop_on_exit = el('napcat_stop_on_exit').value === 'true'
+        payload.processes.napcat.command = el('napcat_command').value
+        payload.processes.napcat.args = napcatArgs.map(String)
+        payload.processes.napcat.work_dir = el('napcat_work_dir').value
+        payload.processes.napcat.wait_http = el('napcat_wait_http').value
+        payload.processes.napcat.wait_timeout_sec = Number(el('napcat_wait_timeout').value || 30)
         payload.hermes = payload.hermes || {}
         payload.hermes.command = el('hermes_command').value
         payload.hermes.disable_tools_in_sandbox = el('disable_tools').value === 'true'
         payload.bridge = payload.bridge || {}
         payload.bridge.self_id = Number(el('self_id').value || 0)
         payload.bridge.respond_to_group_mentions_only = el('group_mentions_only').value === 'true'
+        payload.login = payload.login || {}
+        payload.login.qr_command = qrCommand.map(String)
+        payload.login.status_command = loginStatusCommand.map(String)
+        payload.login.qr_timeout_sec = Number(el('qr_timeout').value || 30)
         payload.models = payload.models || {}
+        payload.models.default_provider = el('default_provider').value
         payload.models.default_model = el('default_model').value
+        payload.models.base_provider = el('base_provider').value
+        payload.models.base_model = el('base_model').value
+        payload.models.strong_provider = el('strong_provider').value
+        payload.models.strong_model = el('strong_model').value
         payload.models.special_model = el('special_model').value
+        payload.models.routing_timeout_sec = Number(el('routing_timeout').value || 30)
         payload.owners = owners.map(Number)
         payload.prompt = payload.prompt || {}
         payload.prompt.identity = el('identity').value
@@ -272,22 +287,27 @@
 
     async function bridgeAction(action) {
       el('message').textContent = ''
-      try {
-        await postJSON(`/api/bridge/${action}`)
-        await refresh()
-      } catch (err) {
-        el('message').textContent = String(err.message || err)
-      }
+      try { await postJSON(`/api/bridge/${action}`); await refresh() } catch (err) { el('message').textContent = String(err.message || err) }
     }
 
     async function runDiagnostics() {
       el('diagnostics').textContent = 'checking...'
-      try {
-        const out = await getJSON('/api/diagnostics')
-        el('diagnostics').textContent = JSON.stringify(out.diagnostics, null, 2)
-      } catch (err) {
-        el('diagnostics').textContent = String(err.message || err)
-      }
+      try { const out = await getJSON('/api/diagnostics'); el('diagnostics').textContent = JSON.stringify(out.diagnostics, null, 2) } catch (err) { el('diagnostics').textContent = String(err.message || err) }
+    }
+
+    async function renderQR() {
+      el('qrOutput').textContent = 'rendering...'
+      try { const out = await postJSON('/api/login/qr'); el('qrOutput').textContent = out.qr.render } catch (err) { el('qrOutput').textContent = String(err.message || err) }
+    }
+
+    async function loginStatus() {
+      el('qrOutput').textContent = 'checking login status...'
+      try { const out = await getJSON('/api/login/status'); el('qrOutput').textContent = JSON.stringify(out.login, null, 2) } catch (err) { el('qrOutput').textContent = String(err.message || err) }
+    }
+
+    async function loadLogs() {
+      el('logs').textContent = 'loading...'
+      try { const out = await getJSON('/api/logs'); el('logs').textContent = out.log } catch (err) { el('logs').textContent = String(err.message || err) }
     }
 
     el('refreshBtn').onclick = () => refresh().catch(err => { el('health').textContent = String(err.message || err) })
@@ -295,7 +315,9 @@
     el('startBridgeBtn').onclick = () => bridgeAction('start')
     el('stopBridgeBtn').onclick = () => bridgeAction('stop')
     el('diagnosticsBtn').onclick = runDiagnostics
-
+    el('qrBtn').onclick = renderQR
+    el('loginStatusBtn').onclick = loginStatus
+    el('logsBtn').onclick = loadLogs
     refresh().catch(err => {
       el('health').textContent = String(err.message || err)
       el('connectorStatus').textContent = String(err.message || err)

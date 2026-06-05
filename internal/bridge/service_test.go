@@ -5,8 +5,10 @@ package bridge
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"billbot/internal/config"
 	"billbot/internal/connector"
@@ -22,6 +24,17 @@ type fakeConnector struct {
 type sentMessage struct {
 	chatID string
 	text   string
+}
+
+func testMessage(text, userID string) connector.Message {
+	return connector.Message{
+		Platform: connector.PlatformQQ,
+		BotID:    "12345",
+		ChatID:   "private:" + userID,
+		UserID:   userID,
+		Private:  true,
+		Text:     text,
+	}
 }
 
 func (f *fakeConnector) Name() string { return "fake" }
@@ -201,5 +214,84 @@ func TestServiceBlocksFullModeForNonOwner(t *testing.T) {
 	}
 	if len(fake.sent) != 1 || !strings.Contains(fake.sent[0].text, "full environment") {
 		t.Fatalf("unexpected rejection message: %#v", fake.sent)
+	}
+}
+
+func TestServiceRoutesBaseAnswerDirectly(t *testing.T) {
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Models.BaseModel = "base"
+	cfg.Models.StrongModel = "strong"
+	svc := NewService(cfg)
+	var models []string
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		models = append(models, cfg.Models.DefaultModel)
+		return "base answer", "session-1", nil
+	}
+
+	reply, err := svc.runWithSession(context.Background(), cfg, testMessage("simple", "10001"), svc.sessions, "key", "", "", svc.runHermes)
+	if err != nil {
+		t.Fatalf("runWithSession: %v", err)
+	}
+	if reply != "base answer" {
+		t.Fatalf("reply = %q", reply)
+	}
+	if !slices.Equal(models, []string{"base"}) {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestServiceRoutesStrongOnMarker(t *testing.T) {
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Models.BaseModel = "base"
+	cfg.Models.StrongModel = "strong"
+	svc := NewService(cfg)
+	var models []string
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		models = append(models, cfg.Models.DefaultModel)
+		if cfg.Models.DefaultModel == "base" {
+			return "BILLBOT_ROUTE_STRONG", "", nil
+		}
+		return "strong answer", "session-strong", nil
+	}
+
+	reply, err := svc.runWithSession(context.Background(), cfg, testMessage("hard", "10001"), svc.sessions, "key", "", "", svc.runHermes)
+	if err != nil {
+		t.Fatalf("runWithSession: %v", err)
+	}
+	if reply != "strong answer" {
+		t.Fatalf("reply = %q", reply)
+	}
+	if !slices.Equal(models, []string{"base", "strong"}) {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestServiceSendsProgressForSlowWork(t *testing.T) {
+	fake := &fakeConnector{}
+	cfg := config.Default()
+	cfg.Runtime.DataDir = t.TempDir()
+	cfg.Runtime.StartNoticeDelaySec = 1
+	cfg.Runtime.ProgressIntervalSec = 1
+	svc := NewService(cfg)
+	svc.conn = fake
+	svc.running = true
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		time.Sleep(1200 * time.Millisecond)
+		return "done", "session-1", nil
+	}
+
+	svc.handleMessage(testMessage("hello", "10001"))
+
+	var texts []string
+	for _, sent := range fake.sent {
+		texts = append(texts, sent.text)
+	}
+	if !slices.Contains(texts, "BillBot is working on this request.") {
+		t.Fatalf("progress message missing: %#v", texts)
+	}
+	if !slices.Contains(texts, "done") {
+		t.Fatalf("final reply missing: %#v", texts)
 	}
 }

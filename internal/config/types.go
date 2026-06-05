@@ -18,6 +18,7 @@ type Config struct {
 	Connector ConnectorConfig `json:"connector" yaml:"connector"`
 	NapCat    NapCatConfig    `json:"napcat" yaml:"napcat"`
 	Bridge    BridgeConfig    `json:"bridge" yaml:"bridge"`
+	Login     LoginConfig     `json:"login" yaml:"login"`
 	Hermes    HermesConfig    `json:"hermes" yaml:"hermes"`
 	Commands  []CommandConfig `json:"commands" yaml:"commands"`
 	Models    ModelsConfig    `json:"models" yaml:"models"`
@@ -71,6 +72,12 @@ type BridgeConfig struct {
 	Enabled                    bool  `json:"enabled" yaml:"enabled"`
 	RespondToGroupMentionsOnly bool  `json:"respond_to_group_mentions_only" yaml:"respond_to_group_mentions_only"`
 	SelfID                     int64 `json:"self_id" yaml:"self_id"`
+}
+
+type LoginConfig struct {
+	QRCommand     []string `json:"qr_command" yaml:"qr_command"`
+	QRTimeoutSec  int      `json:"qr_timeout_sec" yaml:"qr_timeout_sec"`
+	StatusCommand []string `json:"status_command" yaml:"status_command"`
 }
 
 type HermesConfig struct {
@@ -149,6 +156,7 @@ func Default() Config {
 		Connector: ConnectorConfig{Mode: "external", Name: "napcat"},
 		NapCat:    NapCatConfig{HTTP: "http://127.0.0.1:3000", WS: "ws://127.0.0.1:3001"},
 		Bridge:    BridgeConfig{RespondToGroupMentionsOnly: true},
+		Login:     LoginConfig{QRTimeoutSec: 30},
 		Hermes:    HermesConfig{Command: "hermes", DisableToolsInSandbox: true},
 		Models:    ModelsConfig{RoutingTimeoutSec: 30, FlashTimeoutSec: 90, HeavyTimeoutSec: 300},
 		Owners:    []int64{},
@@ -307,6 +315,9 @@ func (c *Config) Normalize() {
 	}
 	if c.Hermes.Command == "" {
 		c.Hermes.Command = def.Hermes.Command
+	}
+	if c.Login.QRTimeoutSec == 0 {
+		c.Login.QRTimeoutSec = def.Login.QRTimeoutSec
 	}
 	if c.Models.FlashTimeoutSec == 0 {
 		c.Models.FlashTimeoutSec = def.Models.FlashTimeoutSec

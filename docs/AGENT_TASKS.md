@@ -49,6 +49,7 @@ Current state
 - Dashboard can edit config, bridge settings, and dashboard-configured slash commands
 - Slash commands support prompt, skill prompt, and fixed-argv exec actions
 - Runtime requirements now include single executable startup, `--cli`, NapCat login QR handling, async per-session processing, Hermes session resume, model/API routing, progress feedback, and runtime logging.
+- QQ login QR/status support is implemented through operator-configured external argv arrays: `login.qr_command` and `login.status_command`. These commands may call a locally installed NapCat launcher or a supported local API path, but BillBot must not depend on NapCat WebUI and must not bundle NapCat artifacts.
 
 Verified commands
 
@@ -304,6 +305,7 @@ Dashboard:
 CLI mode:
 - `billbot.exe --cli --port 2006` should run a pure terminal control mode.
 - CLI should show BillBot, bridge, NapCat, and Hermes status.
+- `status` should include bridge status plus NapCat/Hermes diagnostics. `diag` may still run the same diagnostics explicitly.
 - CLI should start and stop bridge.
 - CLI should run diagnostics.
 - CLI should show QQ login status.

@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"billbot/internal/bridge"
 	"billbot/internal/config"
 	"billbot/internal/connector/napcat"
 	"billbot/internal/diagnostics"
+	"billbot/internal/loginqr"
 )
 
 func main() {
@@ -129,6 +131,42 @@ func main() {
 		}
 		writeJSON(w, map[string]any{"diagnostics": diagnostics.Run(r.Context(), cfg)})
 	})
+	mux.HandleFunc("/api/login/qr", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		out, err := loginqr.Fetch(r.Context(), cfg.Login)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{"qr": out})
+	})
+	mux.HandleFunc("/api/login/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		out, err := loginqr.Status(r.Context(), cfg.Login)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{"login": out})
+	})
+	mux.HandleFunc("/api/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		text, err := readLogTail(cfg.Runtime.LogFile, 65536)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]any{"log": text})
+	})
 	mux.Handle("/", http.FileServer(http.Dir(*webDir)))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -157,23 +195,31 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 	fmt.Println("BillBot CLI")
 	fmt.Printf("config: %s\n", configPath)
 	fmt.Printf("dashboard port: %d\n", cfg.Server.Port)
-	fmt.Println("commands: status, diag, start, stop, qr, help, quit")
+	fmt.Println("commands: status, diag, start, stop, qr, login, logs, set, help, quit")
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("billbot> ")
 		if !scanner.Scan() {
 			break
 		}
-		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+		line := normalizeCLIInput(scanner.Text())
+		switch strings.ToLower(line) {
 		case "", "help":
 			fmt.Println("status  show bridge status")
 			fmt.Println("diag    run NapCat and Hermes diagnostics")
 			fmt.Println("start   start bridge and configured NapCat process")
 			fmt.Println("stop    stop bridge")
 			fmt.Println("qr      show QQ login QR availability")
+			fmt.Println("login   show QQ login status")
+			fmt.Println("logs    show recent runtime logs")
+			fmt.Println("set KEY VALUE  update a supported config field and save")
 			fmt.Println("quit    exit CLI")
 		case "status":
-			printJSON(map[string]any{"bridge": bridgeSvc.Status(), "dashboard": fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port)})
+			printJSON(map[string]any{
+				"bridge":      bridgeSvc.Status(),
+				"dashboard":   fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port),
+				"diagnostics": diagnostics.Run(ctx, cfg),
+			})
 		case "diag":
 			printJSON(map[string]any{"diagnostics": diagnostics.Run(ctx, cfg)})
 		case "start":
@@ -189,11 +235,52 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 			}
 			printJSON(map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
 		case "qr":
-			fmt.Println("QQ QR login needs a supported NapCat launcher/API QR source before BillBot can render it in CLI.")
+			out, err := loginqr.Fetch(ctx, cfg.Login)
+			if err != nil {
+				fmt.Printf("qr failed: %v\n", err)
+				fmt.Println("Configure login.qr_command with a cross-platform NapCat launcher/API command that prints QR content.")
+				continue
+			}
+			fmt.Println(out.Render)
+		case "login":
+			out, err := loginqr.Status(ctx, cfg.Login)
+			if err != nil {
+				fmt.Printf("login status failed: %v\n", err)
+				fmt.Println("Configure login.status_command with a cross-platform NapCat launcher/API command.")
+				continue
+			}
+			printJSON(map[string]any{"login": out})
+		case "logs":
+			text, err := readLogTail(cfg.Runtime.LogFile, 65536)
+			if err != nil {
+				fmt.Printf("logs failed: %v\n", err)
+				continue
+			}
+			fmt.Print(text)
 		case "quit", "exit":
 			_ = bridgeSvc.Stop()
 			return
 		default:
+			if strings.HasPrefix(strings.ToLower(line), "set ") {
+				parts := strings.SplitN(line, " ", 3)
+				if len(parts) != 3 {
+					fmt.Println("usage: set KEY VALUE")
+					continue
+				}
+				next := cfg
+				if err := setConfigValue(&next, parts[1], parts[2]); err != nil {
+					fmt.Printf("set failed: %v\n", err)
+					continue
+				}
+				if err := config.Save(configPath, next); err != nil {
+					fmt.Printf("save failed: %v\n", err)
+					continue
+				}
+				cfg = next
+				bridgeSvc.UpdateConfig(cfg)
+				fmt.Println("saved")
+				continue
+			}
 			fmt.Println("unknown command; type help")
 		}
 	}
@@ -203,6 +290,12 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 	_ = bridgeSvc.Stop()
 }
 
+func normalizeCLIInput(text string) string {
+	text = strings.TrimPrefix(text, "\ufeff")
+	text = strings.ReplaceAll(text, "\x00", "")
+	return strings.TrimSpace(text)
+}
+
 func printJSON(v any) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -210,6 +303,78 @@ func printJSON(v any) {
 		return
 	}
 	fmt.Println(string(b))
+}
+
+func readLogTail(path string, maxBytes int64) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("runtime.log_file is empty")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	start := int64(0)
+	if info.Size() > maxBytes {
+		start = info.Size() - maxBytes
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return "", err
+	}
+	b, err := io.ReadAll(file)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func setConfigValue(cfg *config.Config, key string, value string) error {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "napcat.http":
+		cfg.NapCat.HTTP = value
+	case "napcat.ws":
+		cfg.NapCat.WS = value
+	case "hermes.command":
+		cfg.Hermes.Command = value
+	case "models.default_provider":
+		cfg.Models.DefaultProvider = value
+	case "models.default_model":
+		cfg.Models.DefaultModel = value
+	case "models.base_provider":
+		cfg.Models.BaseProvider = value
+	case "models.base_model":
+		cfg.Models.BaseModel = value
+	case "models.strong_provider":
+		cfg.Models.StrongProvider = value
+	case "models.strong_model":
+		cfg.Models.StrongModel = value
+	case "login.qr_command":
+		cfg.Login.QRCommand = strings.Fields(value)
+	case "login.status_command":
+		cfg.Login.StatusCommand = strings.Fields(value)
+	case "processes.napcat.command":
+		cfg.Processes.NapCat.Command = value
+	case "processes.napcat.auto_start":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Processes.NapCat.AutoStart = v
+	case "bridge.self_id":
+		v, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return err
+		}
+		cfg.Bridge.SelfID = v
+	default:
+		return fmt.Errorf("unsupported config key %q", key)
+	}
+	cfg.Normalize()
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
