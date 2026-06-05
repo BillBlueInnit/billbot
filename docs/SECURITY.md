@@ -56,7 +56,7 @@ Slash commands must follow the same trust boundary:
 - Command names are route keys only. They must be English identifiers matching `/[A-Za-z][A-Za-z0-9_-]*/`.
 - A message like `[qid 123] /disk` must not grant owner permission.
 - Command permissions must use `connector.Message.UserID` from the parsed NapCat event.
-- Commands that execute a process must use a dashboard-configured allowlist argv such as `["powershell", "-NoProfile", "-Command", "Get-Date"]`.
+- Commands that execute a process must use a dashboard-configured allowlist argv such as `["sh", "-lc", "date"]` on Linux or a platform-specific argv configured by the operator.
 - Never concatenate untrusted message text into a shell command.
 - `exec` commands are owner-only even if the dashboard config omits `owner_only`.
 - `prompt` and `skill` commands may pass command arguments to Hermes, but the arguments remain untrusted user content.

@@ -14,6 +14,7 @@ type Config struct {
 	Name      string          `json:"name" yaml:"name"`
 	Server    ServerConfig    `json:"server" yaml:"server"`
 	Runtime   RuntimeConfig   `json:"runtime" yaml:"runtime"`
+	Processes ProcessesConfig `json:"processes" yaml:"processes"`
 	Connector ConnectorConfig `json:"connector" yaml:"connector"`
 	NapCat    NapCatConfig    `json:"napcat" yaml:"napcat"`
 	Bridge    BridgeConfig    `json:"bridge" yaml:"bridge"`
@@ -42,6 +43,20 @@ type RuntimeConfig struct {
 	MaxTurns            int    `json:"max_turns" yaml:"max_turns"`
 }
 
+type ProcessesConfig struct {
+	NapCat ManagedProcessConfig `json:"napcat" yaml:"napcat"`
+}
+
+type ManagedProcessConfig struct {
+	AutoStart   bool     `json:"auto_start" yaml:"auto_start"`
+	Command     string   `json:"command" yaml:"command"`
+	Args        []string `json:"args" yaml:"args"`
+	WorkDir     string   `json:"work_dir" yaml:"work_dir"`
+	WaitHTTP    string   `json:"wait_http" yaml:"wait_http"`
+	WaitTimeout int      `json:"wait_timeout_sec" yaml:"wait_timeout_sec"`
+	StopOnExit  bool     `json:"stop_on_exit" yaml:"stop_on_exit"`
+}
+
 type ConnectorConfig struct {
 	Mode string `json:"mode" yaml:"mode"`
 	Name string `json:"name" yaml:"name"`
@@ -68,6 +83,8 @@ type CommandConfig struct {
 	Type       string   `json:"type" yaml:"type"`
 	RequireAt  bool     `json:"require_at" yaml:"require_at"`
 	OwnerOnly  bool     `json:"owner_only" yaml:"owner_only"`
+	Model      string   `json:"model" yaml:"model"`
+	Provider   string   `json:"provider" yaml:"provider"`
 	Skill      string   `json:"skill" yaml:"skill"`
 	Prompt     string   `json:"prompt" yaml:"prompt"`
 	Exec       []string `json:"exec" yaml:"exec"`
@@ -75,10 +92,16 @@ type CommandConfig struct {
 }
 
 type ModelsConfig struct {
-	DefaultModel    string `json:"default_model" yaml:"default_model"`
-	SpecialModel    string `json:"special_model" yaml:"special_model"`
-	FlashTimeoutSec int    `json:"flash_timeout_sec" yaml:"flash_timeout_sec"`
-	HeavyTimeoutSec int    `json:"heavy_timeout_sec" yaml:"heavy_timeout_sec"`
+	DefaultModel      string `json:"default_model" yaml:"default_model"`
+	DefaultProvider   string `json:"default_provider" yaml:"default_provider"`
+	BaseModel         string `json:"base_model" yaml:"base_model"`
+	BaseProvider      string `json:"base_provider" yaml:"base_provider"`
+	StrongModel       string `json:"strong_model" yaml:"strong_model"`
+	StrongProvider    string `json:"strong_provider" yaml:"strong_provider"`
+	SpecialModel      string `json:"special_model" yaml:"special_model"`
+	RoutingTimeoutSec int    `json:"routing_timeout_sec" yaml:"routing_timeout_sec"`
+	FlashTimeoutSec   int    `json:"flash_timeout_sec" yaml:"flash_timeout_sec"`
+	HeavyTimeoutSec   int    `json:"heavy_timeout_sec" yaml:"heavy_timeout_sec"`
 }
 
 type PromptConfig struct {
@@ -120,11 +143,14 @@ func Default() Config {
 			ProgressIntervalSec: 25,
 			MaxTurns:            120,
 		},
+		Processes: ProcessesConfig{
+			NapCat: ManagedProcessConfig{WaitHTTP: "http://127.0.0.1:3000/get_status", WaitTimeout: 30},
+		},
 		Connector: ConnectorConfig{Mode: "external", Name: "napcat"},
 		NapCat:    NapCatConfig{HTTP: "http://127.0.0.1:3000", WS: "ws://127.0.0.1:3001"},
 		Bridge:    BridgeConfig{RespondToGroupMentionsOnly: true},
 		Hermes:    HermesConfig{Command: "hermes", DisableToolsInSandbox: true},
-		Models:    ModelsConfig{FlashTimeoutSec: 90, HeavyTimeoutSec: 300},
+		Models:    ModelsConfig{RoutingTimeoutSec: 30, FlashTimeoutSec: 90, HeavyTimeoutSec: 300},
 		Owners:    []int64{},
 		Prompt:    PromptConfig{},
 		Security:  SecurityConfig{Mode: "sandbox", AllowFullForOwnersOnly: true},
@@ -264,6 +290,12 @@ func (c *Config) Normalize() {
 	if c.Connector.Mode == "" {
 		c.Connector.Mode = def.Connector.Mode
 	}
+	if c.Processes.NapCat.WaitHTTP == "" {
+		c.Processes.NapCat.WaitHTTP = def.Processes.NapCat.WaitHTTP
+	}
+	if c.Processes.NapCat.WaitTimeout == 0 {
+		c.Processes.NapCat.WaitTimeout = def.Processes.NapCat.WaitTimeout
+	}
 	if c.Connector.Name == "" {
 		c.Connector.Name = def.Connector.Name
 	}
@@ -278,6 +310,9 @@ func (c *Config) Normalize() {
 	}
 	if c.Models.FlashTimeoutSec == 0 {
 		c.Models.FlashTimeoutSec = def.Models.FlashTimeoutSec
+	}
+	if c.Models.RoutingTimeoutSec == 0 {
+		c.Models.RoutingTimeoutSec = def.Models.RoutingTimeoutSec
 	}
 	if c.Models.HeavyTimeoutSec == 0 {
 		c.Models.HeavyTimeoutSec = def.Models.HeavyTimeoutSec

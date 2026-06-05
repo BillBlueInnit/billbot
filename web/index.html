@@ -93,6 +93,14 @@
       </section>
 
       <section class="panel wide">
+        <h2>环境诊断</h2>
+        <pre id="diagnostics" class="status">not checked</pre>
+        <div class="actions">
+          <button id="diagnosticsBtn" class="secondary">运行诊断</button>
+        </div>
+      </section>
+
+      <section class="panel wide">
         <h2>基础配置</h2>
         <div class="grid">
           <div>
@@ -272,10 +280,21 @@
       }
     }
 
+    async function runDiagnostics() {
+      el('diagnostics').textContent = 'checking...'
+      try {
+        const out = await getJSON('/api/diagnostics')
+        el('diagnostics').textContent = JSON.stringify(out.diagnostics, null, 2)
+      } catch (err) {
+        el('diagnostics').textContent = String(err.message || err)
+      }
+    }
+
     el('refreshBtn').onclick = () => refresh().catch(err => { el('health').textContent = String(err.message || err) })
     el('saveBtn').onclick = saveConfig
     el('startBridgeBtn').onclick = () => bridgeAction('start')
     el('stopBridgeBtn').onclick = () => bridgeAction('stop')
+    el('diagnosticsBtn').onclick = runDiagnostics
 
     refresh().catch(err => {
       el('health').textContent = String(err.message || err)

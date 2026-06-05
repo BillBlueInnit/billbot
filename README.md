@@ -2,54 +2,60 @@
 
 License: LGPL-3.0-only
 
-BillBot 是一个跨平台 bot 框架原型，用 Go 后端和静态 dashboard 管理 QQ connector、Hermes runner、prompt、owner 和安全模式。
+BillBot is a cross-platform QQ bridge prototype written in Go. It provides a local dashboard and CLI to manage a NapCat OneBot connector, Hermes runner, prompt settings, owner policy, slash commands, diagnostics, and runtime state.
 
-## 设计原则
+## Principles
 
-- 仓库不内置个人信息、owner QQ、identity、API key 或默认模型。
-- NapCatQQ 作为外部 connector 依赖，不随 BillBot 分发源码、二进制、镜像或修改版包。
-- 所有运行配置通过 dashboard 或外部配置文件填写。
-- 核心后端使用 Go，目标支持 Windows、Linux 和 macOS。
+- Do not commit personal owner QQ IDs, persona prompts, model choices, API keys, runtime sessions, QR codes, or login caches.
+- NapCatQQ is an external connector dependency. BillBot must not vendor, bundle, patch-package, or redistribute NapCatQQ or NTQQ binaries.
+- Hermes is an external CLI runner.
+- The Go backend should run on Windows, Ubuntu/Linux, and macOS.
 
-## 当前 v0.1 能力
+## Build
 
-- Go HTTP 后端。
-- `/api/health`
-- `/api/config` GET/POST
-- `/api/connectors/status`
-- `/api/bridge/status`
-- `/api/bridge/start`
-- `/api/bridge/stop`
-- 静态 dashboard 配置页和 bridge 启停控制。
-- 配置文件持久化。
-- NapCat OneBot HTTP 状态检查和消息发送。
-- NapCat OneBot WebSocket 消息接收与事件解析。
-- Hermes CLI runner 基础集成。
-- 简单 session state JSON 持久化模块。
+Ubuntu/Linux:
 
-## 运行
-
-```powershell
-D:\golang\go\bin\go.exe run .\cmd\billbot --port 2006
+```bash
+go test ./...
+go build -o ./bin/billbot ./cmd/billbot
 ```
 
-然后打开：
+Windows:
+
+```powershell
+D:\golang\go\bin\go.exe test ./...
+D:\golang\go\bin\go.exe build -o .\bin\billbot.exe .\cmd\billbot
+```
+
+## Run
+
+Dashboard mode:
+
+```bash
+./bin/billbot --port 2006
+```
+
+Open:
 
 ```text
 http://127.0.0.1:2006
 ```
 
-也可以指定配置文件：
+CLI mode:
 
-```powershell
-D:\golang\go\bin\go.exe run .\cmd\billbot --config .\config.example.yaml --port 2006
+```bash
+./bin/billbot --cli --port 2006
 ```
 
-## NapCatQQ 连接
+Use a config file:
 
-BillBot 默认使用 external mode：用户自行安装并启动 NapCatQQ，然后在配置中填写 OneBot HTTP/WebSocket 地址。
+```bash
+./bin/billbot --config ./config.example.yaml --port 2006
+```
 
-默认地址：
+## External Dependencies
+
+NapCat OneBot defaults:
 
 ```yaml
 napcat:
@@ -57,25 +63,22 @@ napcat:
   ws: ws://127.0.0.1:3001
 ```
 
-Bridge 启动后会从 WebSocket 接收消息，调用 Hermes，并通过 NapCat HTTP 将回复发回私聊或群聊。
+Bridge start can launch a user-configured local NapCat command through `processes.napcat`, but NapCat remains external and separately licensed.
 
-## 开发验证
+Hermes defaults to the `hermes` command on `PATH`.
 
-```powershell
-D:\golang\go\bin\gofmt.exe -w .\cmd .\internal
-D:\golang\go\bin\go.exe test ./...
-D:\golang\go\bin\go.exe build -o $env:TEMP\billbot-check.exe .\cmd\billbot
+## Install Helpers
+
+Linux helper scripts live under `scripts/`. They only download from upstream at runtime or print setup instructions. They do not include third-party binaries in this repository.
+
+```bash
+bash scripts/install-napcat.sh --mode external
+bash scripts/install-hermes.sh --mode external
 ```
 
-## 合规文档
+## Docs
 
-- `LICENSE`
+- `docs/AGENT_TASKS.md`
+- `docs/SECURITY.md`
 - `docs/LICENSING.md`
 - `THIRD_PARTY_NOTICES.md`
-
-## 致谢
-
-- Thanks to Nous Research and Hermes Agent contributors.
-- Thanks to NapCatQQ project authors and contributors.
-- Thanks to gorilla/websocket contributors.
-- Thanks to go-yaml contributors.

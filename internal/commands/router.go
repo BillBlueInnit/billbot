@@ -18,9 +18,11 @@ import (
 var commandPattern = regexp.MustCompile(`^/([A-Za-z][A-Za-z0-9_-]*)(?:\s+(.*))?$`)
 
 type Result struct {
-	Handled bool
-	Reply   string
-	Prompt  string
+	Handled  bool
+	Reply    string
+	Prompt   string
+	Model    string
+	Provider string
 }
 
 func Handle(ctx context.Context, cfg config.Config, msg connector.Message) (Result, error) {
@@ -44,9 +46,9 @@ func Handle(ctx context.Context, cfg config.Config, msg connector.Message) (Resu
 
 	switch cmd.Type {
 	case "prompt":
-		return Result{Handled: true, Prompt: buildPromptCommandPrompt(cmd, args)}, nil
+		return Result{Handled: true, Prompt: buildPromptCommandPrompt(cmd, args), Model: cmd.Model, Provider: cmd.Provider}, nil
 	case "skill":
-		return Result{Handled: true, Prompt: buildSkillCommandPrompt(cmd, args)}, nil
+		return Result{Handled: true, Prompt: buildSkillCommandPrompt(cmd, args), Model: cmd.Model, Provider: cmd.Provider}, nil
 	case "exec":
 		reply, err := runExec(ctx, cmd)
 		return Result{Handled: true, Reply: reply}, err

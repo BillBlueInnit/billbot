@@ -3,17 +3,22 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"billbot/internal/bridge"
 	"billbot/internal/config"
 	"billbot/internal/connector/napcat"
+	"billbot/internal/diagnostics"
 )
 
 func main() {
@@ -21,6 +26,7 @@ func main() {
 	port := flag.Int("port", 0, "dashboard port")
 	configPath := flag.String("config", defaultConfigPath, "config path")
 	webDir := flag.String("web", defaultWebDir(), "dashboard static file directory")
+	cliMode := flag.Bool("cli", false, "run terminal control mode")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
@@ -37,8 +43,13 @@ func main() {
 			log.Fatalf("create runtime dir %s: %v", dir, err)
 		}
 	}
+	setupLogging(cfg.Runtime.LogFile)
 
 	bridgeSvc := bridge.NewService(cfg)
+	if *cliMode {
+		runCLI(context.Background(), cfg, *configPath, bridgeSvc)
+		return
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -111,12 +122,94 @@ func main() {
 		}
 		writeJSON(w, map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
 	})
+	mux.HandleFunc("/api/diagnostics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		writeJSON(w, map[string]any{"diagnostics": diagnostics.Run(r.Context(), cfg)})
+	})
 	mux.Handle("/", http.FileServer(http.Dir(*webDir)))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("billbot listening on %s", addr)
 	log.Printf("dashboard web dir %s", *webDir)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+func setupLogging(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		log.Printf("create log dir: %v", err)
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		log.Printf("open log file: %v", err)
+		return
+	}
+	log.SetOutput(io.MultiWriter(os.Stdout, file))
+}
+
+func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc *bridge.Service) {
+	fmt.Println("BillBot CLI")
+	fmt.Printf("config: %s\n", configPath)
+	fmt.Printf("dashboard port: %d\n", cfg.Server.Port)
+	fmt.Println("commands: status, diag, start, stop, qr, help, quit")
+	scanner := bufio.NewScanner(os.Stdin)
+	for {
+		fmt.Print("billbot> ")
+		if !scanner.Scan() {
+			break
+		}
+		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+		case "", "help":
+			fmt.Println("status  show bridge status")
+			fmt.Println("diag    run NapCat and Hermes diagnostics")
+			fmt.Println("start   start bridge and configured NapCat process")
+			fmt.Println("stop    stop bridge")
+			fmt.Println("qr      show QQ login QR availability")
+			fmt.Println("quit    exit CLI")
+		case "status":
+			printJSON(map[string]any{"bridge": bridgeSvc.Status(), "dashboard": fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port)})
+		case "diag":
+			printJSON(map[string]any{"diagnostics": diagnostics.Run(ctx, cfg)})
+		case "start":
+			if err := bridgeSvc.Start(); err != nil {
+				fmt.Printf("start failed: %v\n", err)
+				continue
+			}
+			printJSON(map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
+		case "stop":
+			if err := bridgeSvc.Stop(); err != nil {
+				fmt.Printf("stop failed: %v\n", err)
+				continue
+			}
+			printJSON(map[string]any{"ok": true, "bridge": bridgeSvc.Status()})
+		case "qr":
+			fmt.Println("QQ QR login needs a supported NapCat launcher/API QR source before BillBot can render it in CLI.")
+		case "quit", "exit":
+			_ = bridgeSvc.Stop()
+			return
+		default:
+			fmt.Println("unknown command; type help")
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("cli input: %v", err)
+	}
+	_ = bridgeSvc.Stop()
+}
+
+func printJSON(v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Println(string(b))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

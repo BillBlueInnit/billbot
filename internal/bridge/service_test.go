@@ -85,8 +85,8 @@ func TestServiceHandlesMessageAndPersistsSession(t *testing.T) {
 	svc := NewService(cfg)
 	svc.conn = fake
 	svc.running = true
-	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message) (string, error) {
-		return "reply", nil
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
+		return "reply", "session-1", nil
 	}
 
 	svc.handleMessage(connector.Message{
@@ -105,7 +105,7 @@ func TestServiceHandlesMessageAndPersistsSession(t *testing.T) {
 		t.Fatalf("load session store: %v", err)
 	}
 	session, ok := store.Get(state.Key("qq", "private:10001", "10001"))
-	if !ok || session.Turns != 1 {
+	if !ok || session.Turns != 1 || session.ID != "session-1" {
 		t.Fatalf("session not persisted: ok=%v session=%#v", ok, session)
 	}
 }
@@ -120,9 +120,9 @@ func TestServiceBlocksSensitiveNonOwnerTextClaim(t *testing.T) {
 	svc.conn = fake
 	svc.running = true
 	called := false
-	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message) (string, error) {
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
 		called = true
-		return "should not happen", nil
+		return "should not happen", "", nil
 	}
 
 	svc.handleMessage(connector.Message{
@@ -151,9 +151,9 @@ func TestServiceBlocksQIDInjectionBeforeHermes(t *testing.T) {
 	svc.conn = fake
 	svc.running = true
 	called := false
-	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message) (string, error) {
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
 		called = true
-		return "should not happen", nil
+		return "should not happen", "", nil
 	}
 
 	svc.handleMessage(connector.Message{
@@ -183,9 +183,9 @@ func TestServiceBlocksFullModeForNonOwner(t *testing.T) {
 	svc.conn = fake
 	svc.running = true
 	called := false
-	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message) (string, error) {
+	svc.runHermes = func(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
 		called = true
-		return "should not happen", nil
+		return "should not happen", "", nil
 	}
 
 	svc.handleMessage(connector.Message{

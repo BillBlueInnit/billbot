@@ -15,6 +15,7 @@ Modes:
   patch      Prepare local BillBot config snippets for an existing NapCat install.
 
 BillBot does not bundle NapCatQQ. NapCatQQ has its own license.
+Do not redistribute NapCatQQ, NTQQ, modified NapCat bundles, or binary archives through BillBot.
 USAGE
 }
 
@@ -43,6 +44,7 @@ BillBot will download NapCatQQ's upstream installer from:
 
 NapCatQQ is an external project with its own license.
 BillBot does not redistribute or modify it.
+Do not continue unless you accept using the upstream installer directly.
 TEXT
     read -r -p "Continue with upstream download? [y/N] " answer
     case "$answer" in

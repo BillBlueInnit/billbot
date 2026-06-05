@@ -5,6 +5,7 @@ package bridge
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"billbot/internal/connector"
 	"billbot/internal/connector/napcat"
 	"billbot/internal/hermes"
+	"billbot/internal/process"
 	"billbot/internal/security"
 	"billbot/internal/state"
 )
@@ -31,8 +33,10 @@ type Service struct {
 	cfg            config.Config
 	conn           connector.Connector
 	connectorMaker func(config.Config) connector.Connector
-	runHermes      func(context.Context, config.Config, connector.Message) (string, error)
+	runHermes      func(context.Context, config.Config, connector.Message, string) (string, string, error)
+	processes      *process.Manager
 	sessions       *state.Store
+	sessionLocks   map[string]*sync.Mutex
 	running        bool
 	lastError      string
 }
@@ -45,7 +49,9 @@ func NewService(cfg config.Config) *Service {
 		cfg:            cfg,
 		connectorMaker: defaultConnectorMaker,
 		runHermes:      defaultRunHermes,
+		processes:      process.NewManager(),
 		sessions:       store,
+		sessionLocks:   map[string]*sync.Mutex{},
 	}
 }
 
@@ -72,7 +78,7 @@ func (s *Service) Start() error {
 	s.lastError = ""
 	s.mu.Unlock()
 
-	if err := conn.Start(s.handleMessage); err != nil {
+	if err := s.processes.StartNapCat(context.Background(), cfg.Processes.NapCat); err != nil {
 		s.mu.Lock()
 		s.running = false
 		s.conn = nil
@@ -80,6 +86,19 @@ func (s *Service) Start() error {
 		s.mu.Unlock()
 		return err
 	}
+	log.Printf("bridge napcat readiness check completed")
+
+	if err := conn.Start(func(msg connector.Message) {
+		go s.handleMessage(msg)
+	}); err != nil {
+		s.mu.Lock()
+		s.running = false
+		s.conn = nil
+		s.lastError = err.Error()
+		s.mu.Unlock()
+		return err
+	}
+	log.Printf("bridge started")
 	return nil
 }
 
@@ -90,8 +109,16 @@ func (s *Service) Stop() error {
 	s.running = false
 	s.mu.Unlock()
 	if conn != nil {
-		return conn.Stop()
+		if err := conn.Stop(); err != nil {
+			return err
+		}
 	}
+	if s.cfg.Processes.NapCat.StopOnExit {
+		if err := s.processes.StopNapCat(); err != nil {
+			return err
+		}
+	}
+	log.Printf("bridge stopped")
 	return nil
 }
 
@@ -130,6 +157,9 @@ func (s *Service) handleMessage(msg connector.Message) {
 	if conn == nil {
 		return
 	}
+	sessionKey := state.Key(string(msg.Platform), msg.ChatID, msg.UserID)
+	unlock := s.lockSession(sessionKey)
+	defer unlock()
 
 	userID, _ := strconv.ParseInt(msg.UserID, 10, 64)
 	if cfg.Security.Mode == "full" {
@@ -145,13 +175,6 @@ func (s *Service) handleMessage(msg connector.Message) {
 		return
 	}
 
-	if store != nil {
-		key := state.Key(string(msg.Platform), msg.ChatID, msg.UserID)
-		if _, err := store.Increment(key); err != nil {
-			s.setError(err.Error())
-		}
-	}
-
 	timeout := time.Duration(cfg.Models.HeavyTimeoutSec) * time.Second
 	if timeout <= 0 {
 		timeout = 300 * time.Second
@@ -159,7 +182,9 @@ func (s *Service) handleMessage(msg connector.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	reply, err := s.handleCommandOrHermes(ctx, cfg, msg, runHermes)
+	progressDone := s.startProgress(ctx, cfg, conn, msg)
+	reply, err := s.handleCommandOrHermes(ctx, cfg, msg, store, sessionKey, runHermes)
+	progressDone()
 	if err != nil {
 		s.setError(err.Error())
 		reply = "BillBot 调用 Hermes 失败：" + err.Error()
@@ -173,10 +198,10 @@ func (s *Service) handleMessage(msg connector.Message) {
 	}
 }
 
-func (s *Service) handleCommandOrHermes(ctx context.Context, cfg config.Config, msg connector.Message, runHermes func(context.Context, config.Config, connector.Message) (string, error)) (string, error) {
+func (s *Service) handleCommandOrHermes(ctx context.Context, cfg config.Config, msg connector.Message, store *state.Store, sessionKey string, runHermes func(context.Context, config.Config, connector.Message, string) (string, string, error)) (string, error) {
 	result, err := commands.Handle(ctx, cfg, msg)
 	if !result.Handled {
-		return runHermes(ctx, cfg, msg)
+		return s.runWithSession(ctx, cfg, msg, store, sessionKey, "", "", runHermes)
 	}
 	if result.Reply != "" {
 		if err != nil {
@@ -190,9 +215,125 @@ func (s *Service) handleCommandOrHermes(ctx context.Context, cfg config.Config, 
 	if result.Prompt != "" {
 		cmdMsg := msg
 		cmdMsg.Text = result.Prompt + "\n\nOriginal untrusted command text:\n" + msg.Text
-		return runHermes(ctx, cfg, cmdMsg)
+		return s.runWithSession(ctx, cfg, cmdMsg, store, sessionKey, result.Model, result.Provider, runHermes)
 	}
 	return "", nil
+}
+
+func (s *Service) runWithSession(ctx context.Context, cfg config.Config, msg connector.Message, store *state.Store, sessionKey, model, provider string, runHermes func(context.Context, config.Config, connector.Message, string) (string, string, error)) (string, error) {
+	var session state.Session
+	if store != nil {
+		session, _ = store.Get(sessionKey)
+	}
+	if model != "" {
+		cfg.Models.DefaultModel = model
+	}
+	if provider != "" {
+		cfg.Models.DefaultProvider = provider
+	}
+	reply, sessionID, err := s.runRoutedHermes(ctx, cfg, msg, session.ID, runHermes)
+	if store != nil && err == nil {
+		if sessionID != "" {
+			session.ID = sessionID
+		}
+		session.Turns++
+		if saveErr := store.Put(sessionKey, session); saveErr != nil {
+			s.setError(saveErr.Error())
+		}
+	}
+	return reply, err
+}
+
+func (s *Service) runRoutedHermes(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string, runHermes func(context.Context, config.Config, connector.Message, string) (string, string, error)) (string, string, error) {
+	if cfg.Models.BaseModel == "" && cfg.Models.BaseProvider == "" {
+		return runHermes(ctx, cfg, msg, sessionID)
+	}
+	if cfg.Models.StrongModel == "" && cfg.Models.StrongProvider == "" {
+		return runHermes(ctx, cfg, msg, sessionID)
+	}
+
+	baseCfg := cfg
+	baseCfg.Models.DefaultModel = cfg.Models.BaseModel
+	baseCfg.Models.DefaultProvider = cfg.Models.BaseProvider
+	timeout := time.Duration(cfg.Models.RoutingTimeoutSec) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	routeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	routeMsg := msg
+	routeMsg.Text = "You are BillBot's routing model. If the request is simple, answer it directly. If it needs stronger reasoning, return exactly BILLBOT_ROUTE_STRONG and no other text.\n\nUntrusted user request:\n" + msg.Text
+	reply, newSessionID, err := runHermes(routeCtx, baseCfg, routeMsg, sessionID)
+	if err == nil && strings.TrimSpace(reply) != "BILLBOT_ROUTE_STRONG" {
+		log.Printf("model routing used base model direct answer")
+		return reply, newSessionID, nil
+	}
+	if err != nil {
+		log.Printf("model routing escalating after base error: %v", err)
+	} else {
+		log.Printf("model routing escalating to strong model")
+	}
+
+	strongCfg := cfg
+	strongCfg.Models.DefaultModel = cfg.Models.StrongModel
+	strongCfg.Models.DefaultProvider = cfg.Models.StrongProvider
+	return runHermes(ctx, strongCfg, msg, sessionID)
+}
+
+func (s *Service) lockSession(key string) func() {
+	s.mu.Lock()
+	lock := s.sessionLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.sessionLocks[key] = lock
+	}
+	s.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (s *Service) startProgress(ctx context.Context, cfg config.Config, conn connector.Connector, msg connector.Message) func() {
+	delay := time.Duration(cfg.Runtime.StartNoticeDelaySec) * time.Second
+	if delay <= 0 {
+		delay = 6 * time.Second
+	}
+	interval := time.Duration(cfg.Runtime.ProgressIntervalSec) * time.Second
+	if interval <= 0 {
+		interval = 25 * time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-timer.C:
+			_ = conn.Send(msg.ChatID, "BillBot is working on this request.")
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				_ = conn.Send(msg.ChatID, "BillBot is still working.")
+			}
+		}
+	}()
+	return func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
 }
 
 func (s *Service) shouldHandle(msg connector.Message) bool {
@@ -235,10 +376,12 @@ func defaultConnectorMaker(cfg config.Config) connector.Connector {
 	return napcat.New(cfg.NapCat)
 }
 
-func defaultRunHermes(ctx context.Context, cfg config.Config, msg connector.Message) (string, error) {
+func defaultRunHermes(ctx context.Context, cfg config.Config, msg connector.Message, sessionID string) (string, string, error) {
 	prompt := buildPrompt(cfg, msg)
 	runner := hermes.NewRunner(cfg.Hermes.Command)
-	return runner.AskWithOptions(ctx, prompt, hermes.OptionsFromConfig(cfg))
+	opts := hermes.OptionsFromConfig(cfg)
+	opts.SessionID = sessionID
+	return runner.AskWithSession(ctx, prompt, opts)
 }
 
 func buildPrompt(cfg config.Config, msg connector.Message) string {

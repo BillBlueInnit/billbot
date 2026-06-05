@@ -12,6 +12,15 @@ runtime:
   start_notice_delay_sec: 6
   progress_interval_sec: 25
   max_turns: 120
+processes:
+  napcat:
+    auto_start: false
+    command: ""
+    args: []
+    work_dir: ""
+    wait_http: http://127.0.0.1:3000/get_status
+    wait_timeout_sec: 30
+    stop_on_exit: false
 connector:
   mode: external
   name: napcat
@@ -37,11 +46,17 @@ commands: []
 #     type: exec
 #     require_at: true
 #     owner_only: true
-#     exec: ["powershell", "-NoProfile", "-Command", "Get-PSDrive -PSProvider FileSystem"]
+#     exec: ["sh", "-lc", "df -h"]
 #     timeout_sec: 10
 models:
+  default_provider: ""
   default_model: ""
+  base_provider: ""
+  base_model: ""
+  strong_provider: ""
+  strong_model: ""
   special_model: ""
+  routing_timeout_sec: 30
   flash_timeout_sec: 90
   heavy_timeout_sec: 300
 owners: []
