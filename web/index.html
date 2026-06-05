@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>BillBot Dashboard</title>
+  <title>BillBot 控制台</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -37,154 +37,154 @@
 <body>
   <main>
     <header>
-      <h1>BillBot Dashboard</h1>
-      <button id="refreshBtn" class="secondary">Refresh</button>
+      <h1>BillBot 控制台</h1>
+      <button id="refreshBtn" class="secondary">刷新</button>
     </header>
 
     <div class="layout">
       <section class="panel">
-        <h2>Service</h2>
-        <pre id="health" class="status">loading...</pre>
+        <h2>服务状态</h2>
+        <pre id="health" class="status">加载中...</pre>
       </section>
 
       <section class="panel">
-        <h2>Connector</h2>
-        <pre id="connectorStatus" class="status">loading...</pre>
+        <h2>连接器</h2>
+        <pre id="connectorStatus" class="status">加载中...</pre>
       </section>
 
       <section class="panel">
-        <h2>Bridge</h2>
-        <pre id="bridgeStatus" class="status">loading...</pre>
+        <h2>桥接服务</h2>
+        <pre id="bridgeStatus" class="status">加载中...</pre>
         <div class="actions">
-          <button id="startBridgeBtn">Start Bridge</button>
-          <button id="stopBridgeBtn" class="danger">Stop Bridge</button>
+          <button id="startBridgeBtn">启动桥接</button>
+          <button id="stopBridgeBtn" class="danger">停止桥接</button>
         </div>
       </section>
 
       <section class="panel">
-        <h2>Diagnostics</h2>
-        <pre id="diagnostics" class="status">not checked</pre>
+        <h2>诊断</h2>
+        <pre id="diagnostics" class="status">未检查</pre>
         <div class="actions">
-          <button id="diagnosticsBtn" class="secondary">Run Diagnostics</button>
+          <button id="diagnosticsBtn" class="secondary">运行诊断</button>
         </div>
       </section>
 
       <section class="panel wide">
-        <h2>Autostart</h2>
-        <pre id="autostartStatus" class="status">loading...</pre>
+        <h2>系统自启动</h2>
+        <pre id="autostartStatus" class="status">加载中...</pre>
         <div class="grid">
-          <div><label for="autostart_enabled">Config enabled</label><select id="autostart_enabled"><option value="false">false</option><option value="true">true</option></select></div>
-          <div><label for="autostart_name">Service name</label><input id="autostart_name" autocomplete="off" /></div>
+          <div><label for="autostart_enabled">配置中启用</label><select id="autostart_enabled"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="autostart_name">服务名称</label><input id="autostart_name" autocomplete="off" /></div>
         </div>
         <div class="actions">
-          <button id="enableAutostartBtn" class="secondary">Enable OS Autostart</button>
-          <button id="disableAutostartBtn" class="danger">Disable OS Autostart</button>
+          <button id="enableAutostartBtn" class="secondary">启用系统自启动</button>
+          <button id="disableAutostartBtn" class="danger">关闭系统自启动</button>
         </div>
       </section>
 
       <section class="panel wide">
-        <h2>Basic Config</h2>
+        <h2>基础配置</h2>
         <div class="grid">
-          <div><label for="name">Bot name</label><input id="name" autocomplete="off" /></div>
-          <div><label for="port">Dashboard port</label><input id="port" type="number" min="1" max="65535" /></div>
+          <div><label for="name">机器人名称</label><input id="name" autocomplete="off" /></div>
+          <div><label for="port">控制台端口</label><input id="port" type="number" min="1" max="65535" /></div>
           <div><label for="napcat_http">NapCat HTTP</label><input id="napcat_http" autocomplete="off" /></div>
           <div><label for="napcat_ws">NapCat WebSocket</label><input id="napcat_ws" autocomplete="off" /></div>
-          <div><label for="hermes_command">Hermes command</label><input id="hermes_command" autocomplete="off" /></div>
-          <div><label for="bridge_enabled">Bridge auto start</label><select id="bridge_enabled"><option value="false">false</option><option value="true">true</option></select></div>
-          <div><label for="self_id">Bot self QQ ID</label><input id="self_id" type="number" min="0" /></div>
+          <div><label for="hermes_command">Hermes 命令</label><input id="hermes_command" autocomplete="off" /></div>
+          <div><label for="bridge_enabled">桥接自动启动</label><select id="bridge_enabled"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="self_id">机器人 QQ 号</label><input id="self_id" type="number" min="0" /></div>
         </div>
-        <label for="owners">Owners JSON array</label>
+        <label for="owners">管理员 QQ 号 JSON 数组</label>
         <textarea id="owners" spellcheck="false"></textarea>
       </section>
 
       <section class="panel wide">
-        <h2>NapCat Process</h2>
-        <pre id="napcatProcessStatus" class="status">loading...</pre>
+        <h2>NapCat 进程</h2>
+        <pre id="napcatProcessStatus" class="status">加载中...</pre>
         <div class="actions">
-          <button id="startNapcatBtn" class="secondary">Start NapCat</button>
-          <button id="stopNapcatBtn" class="danger">Stop NapCat</button>
+          <button id="startNapcatBtn" class="secondary">启动 NapCat</button>
+          <button id="stopNapcatBtn" class="danger">停止 NapCat</button>
         </div>
         <div class="grid">
-          <div><label for="napcat_auto_start">Auto start</label><select id="napcat_auto_start"><option value="false">false</option><option value="true">true</option></select></div>
-          <div><label for="napcat_stop_on_exit">Stop on bridge stop</label><select id="napcat_stop_on_exit"><option value="false">false</option><option value="true">true</option></select></div>
-          <div><label for="napcat_command">Command</label><input id="napcat_command" autocomplete="off" /></div>
-          <div><label for="napcat_work_dir">Work dir</label><input id="napcat_work_dir" autocomplete="off" /></div>
-          <div><label for="napcat_wait_http">Wait HTTP</label><input id="napcat_wait_http" autocomplete="off" /></div>
-          <div><label for="napcat_wait_timeout">Wait timeout seconds</label><input id="napcat_wait_timeout" type="number" min="1" /></div>
+          <div><label for="napcat_auto_start">自动启动</label><select id="napcat_auto_start"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="napcat_stop_on_exit">桥接停止时关闭</label><select id="napcat_stop_on_exit"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="napcat_command">启动命令</label><input id="napcat_command" autocomplete="off" /></div>
+          <div><label for="napcat_work_dir">工作目录</label><input id="napcat_work_dir" autocomplete="off" /></div>
+          <div><label for="napcat_wait_http">就绪检测 HTTP</label><input id="napcat_wait_http" autocomplete="off" /></div>
+          <div><label for="napcat_wait_timeout">就绪等待秒数</label><input id="napcat_wait_timeout" type="number" min="1" /></div>
         </div>
-        <label for="napcat_args">Args JSON array</label>
+        <label for="napcat_args">启动参数 JSON 数组</label>
         <textarea id="napcat_args" spellcheck="false"></textarea>
       </section>
 
       <section class="panel wide">
-        <h2>Model Routing</h2>
+        <h2>模型分流</h2>
         <div class="grid">
-          <div><label for="default_provider">Default provider</label><input id="default_provider" autocomplete="off" /></div>
-          <div><label for="default_model">Default model</label><input id="default_model" autocomplete="off" /></div>
-          <div><label for="base_provider">Base provider</label><input id="base_provider" autocomplete="off" /></div>
-          <div><label for="base_model">Base model</label><input id="base_model" autocomplete="off" /></div>
-          <div><label for="strong_provider">Strong provider</label><input id="strong_provider" autocomplete="off" /></div>
-          <div><label for="strong_model">Strong model</label><input id="strong_model" autocomplete="off" /></div>
-          <div><label for="special_model">Special model</label><input id="special_model" autocomplete="off" /></div>
-          <div><label for="routing_timeout">Routing timeout seconds</label><input id="routing_timeout" type="number" min="1" /></div>
-          <div><label for="flash_timeout">Flash timeout seconds</label><input id="flash_timeout" type="number" min="1" /></div>
-          <div><label for="heavy_timeout">Heavy timeout seconds</label><input id="heavy_timeout" type="number" min="1" /></div>
+          <div><label for="default_provider">默认 API/Provider</label><input id="default_provider" autocomplete="off" /></div>
+          <div><label for="default_model">默认模型</label><input id="default_model" autocomplete="off" /></div>
+          <div><label for="base_provider">基础 API/Provider</label><input id="base_provider" autocomplete="off" /></div>
+          <div><label for="base_model">基础模型</label><input id="base_model" autocomplete="off" /></div>
+          <div><label for="strong_provider">强推理 API/Provider</label><input id="strong_provider" autocomplete="off" /></div>
+          <div><label for="strong_model">强推理模型</label><input id="strong_model" autocomplete="off" /></div>
+          <div><label for="special_model">特殊指令模型</label><input id="special_model" autocomplete="off" /></div>
+          <div><label for="routing_timeout">分流超时秒数</label><input id="routing_timeout" type="number" min="1" /></div>
+          <div><label for="flash_timeout">快速模型超时秒数</label><input id="flash_timeout" type="number" min="1" /></div>
+          <div><label for="heavy_timeout">强推理超时秒数</label><input id="heavy_timeout" type="number" min="1" /></div>
         </div>
       </section>
 
       <section class="panel">
-        <h2>Security</h2>
-        <label for="mode">Security mode</label>
+        <h2>安全策略</h2>
+        <label for="mode">安全模式</label>
         <select id="mode"><option value="sandbox">sandbox</option><option value="full">full</option></select>
-        <label for="group_mentions_only">Group handling</label>
-        <select id="group_mentions_only"><option value="true">only when mentioned</option><option value="false">all group messages</option></select>
-        <label for="disable_tools">Sandbox tools</label>
-        <select id="disable_tools"><option value="true">disable tools in sandbox</option><option value="false">allow Hermes defaults</option></select>
+        <label for="group_mentions_only">群聊响应</label>
+        <select id="group_mentions_only"><option value="true">仅被 @ 时响应</option><option value="false">响应所有群消息</option></select>
+        <label for="disable_tools">沙盒工具</label>
+        <select id="disable_tools"><option value="true">沙盒中禁用工具</option><option value="false">使用 Hermes 默认设置</option></select>
       </section>
 
       <section class="panel">
-        <h2>Runtime</h2>
-        <label for="start_notice_delay">Working notice delay seconds</label>
+        <h2>运行时</h2>
+        <label for="start_notice_delay">工作提示延迟秒数</label>
         <input id="start_notice_delay" type="number" min="1" />
-        <label for="progress_interval">Progress interval seconds</label>
+        <label for="progress_interval">进度提示间隔秒数</label>
         <input id="progress_interval" type="number" min="1" />
-        <label for="max_turns">Max turns per session</label>
+        <label for="max_turns">单会话最大轮数</label>
         <input id="max_turns" type="number" min="1" />
       </section>
 
       <section class="panel">
-        <h2>QQ Login QR</h2>
-        <label for="qr_command">QR command JSON array</label>
+        <h2>QQ 登录二维码</h2>
+        <label for="qr_command">二维码命令 JSON 数组</label>
         <textarea id="qr_command" spellcheck="false"></textarea>
-        <label for="login_status_command">Status command JSON array</label>
+        <label for="login_status_command">登录状态命令 JSON 数组</label>
         <textarea id="login_status_command" spellcheck="false"></textarea>
-        <label for="qr_timeout">QR timeout seconds</label>
+        <label for="qr_timeout">二维码命令超时秒数</label>
         <input id="qr_timeout" type="number" min="1" />
         <div class="actions">
-          <button id="qrBtn" class="secondary">Render QR</button>
-          <button id="loginStatusBtn" class="secondary">Login Status</button>
+          <button id="qrBtn" class="secondary">渲染二维码</button>
+          <button id="loginStatusBtn" class="secondary">检查登录状态</button>
         </div>
-        <pre id="qrOutput" class="status">not rendered</pre>
+        <pre id="qrOutput" class="status">未渲染</pre>
       </section>
 
       <section class="panel wide">
-        <h2>Prompt And Commands</h2>
-        <label for="identity">Identity</label>
+        <h2>提示词和指令</h2>
+        <label for="identity">身份设定</label>
         <textarea id="identity"></textarea>
-        <label for="style">Style</label>
+        <label for="style">回复风格</label>
         <textarea id="style"></textarea>
-        <label for="commands">Commands JSON array</label>
+        <label for="commands">指令 JSON 数组</label>
         <textarea id="commands" spellcheck="false"></textarea>
-        <div class="actions"><button id="saveBtn">Save Config</button></div>
+        <div class="actions"><button id="saveBtn">保存配置</button></div>
         <div id="message" class="message"></div>
-        <div class="hint">Changing the dashboard port requires restarting BillBot.</div>
+        <div class="hint">修改控制台端口后需要重启 BillBot。</div>
       </section>
 
       <section class="panel wide">
-        <h2>Runtime Logs</h2>
-        <pre id="logs" class="status">not loaded</pre>
+        <h2>运行日志</h2>
+        <pre id="logs" class="status">未加载</pre>
         <div class="actions">
-          <button id="logsBtn" class="secondary">Load Logs</button>
+          <button id="logsBtn" class="secondary">加载日志</button>
         </div>
       </section>
     </div>
@@ -271,7 +271,7 @@
         const loginStatusCommand = JSON.parse(el('login_status_command').value || '[]')
         const napcatArgs = JSON.parse(el('napcat_args').value || '[]')
         if (!Array.isArray(owners) || !Array.isArray(commands) || !Array.isArray(qrCommand) || !Array.isArray(loginStatusCommand) || !Array.isArray(napcatArgs)) {
-          throw new Error('JSON array field is invalid')
+          throw new Error('JSON 数组字段格式不正确')
         }
         const payload = structuredClone(current || {})
         payload.name = el('name').value
@@ -327,7 +327,7 @@
         payload.autostart.name = el('autostart_name').value
         const out = await postJSON('/api/config', payload)
         current = out.config
-        message.textContent = 'saved'
+        message.textContent = '已保存'
         await refresh()
       } catch (err) {
         message.textContent = String(err.message || err)
@@ -352,22 +352,22 @@
     }
 
     async function runDiagnostics() {
-      el('diagnostics').textContent = 'checking...'
+      el('diagnostics').textContent = '检查中...'
       try { const out = await getJSON('/api/diagnostics'); el('diagnostics').textContent = JSON.stringify(out.diagnostics, null, 2) } catch (err) { el('diagnostics').textContent = String(err.message || err) }
     }
 
     async function renderQR() {
-      el('qrOutput').textContent = 'rendering...'
+      el('qrOutput').textContent = '渲染中...'
       try { const out = await postJSON('/api/login/qr'); el('qrOutput').textContent = out.qr.render } catch (err) { el('qrOutput').textContent = String(err.message || err) }
     }
 
     async function loginStatus() {
-      el('qrOutput').textContent = 'checking login status...'
+      el('qrOutput').textContent = '正在检查登录状态...'
       try { const out = await getJSON('/api/login/status'); el('qrOutput').textContent = JSON.stringify(out.login, null, 2) } catch (err) { el('qrOutput').textContent = String(err.message || err) }
     }
 
     async function loadLogs() {
-      el('logs').textContent = 'loading...'
+      el('logs').textContent = '加载中...'
       try { const out = await getJSON('/api/logs'); el('logs').textContent = out.log } catch (err) { el('logs').textContent = String(err.message || err) }
     }
 
