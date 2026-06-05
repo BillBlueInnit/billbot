@@ -1,0 +1,72 @@
+# Build artifacts
+/billbot
+/billbot.exe
+/dist/
+/build/
+/out/
+/bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.prof
+coverage.out
+
+# Runtime config and secrets
+/config.yaml
+/config.local.yaml
+/*.local.yaml
+/.env
+.env
+.env.*
+!.env.example
+
+# Runtime data
+/data/
+/logs/
+/tmp/
+/outbox/
+/sandbox/
+/sessions.json
+*.log
+*.pid
+*.sock
+
+# NapCat / QQ local artifacts
+/NapCat/
+/napcat/
+/qrcode.png
+**/qrcode.png
+**/cache/qrcode.png
+**/napcat_*.json
+**/onebot11_*.json
+**/napcat_protocol_*.json
+
+# Dependencies and caches
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.cache/
+
+# Go workspace/cache local files
+go.work
+go.work.sum
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+*.rej
+/_integration_test_worktree/

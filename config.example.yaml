@@ -1,0 +1,54 @@
+name: ""
+server:
+  host: 0.0.0.0
+  port: 2006
+runtime:
+  data_dir: ""
+  log_file: ""
+  outbox_dir: ""
+  tmp_dir: ""
+  sandbox_dir: ""
+  save_interval_sec: 10
+  start_notice_delay_sec: 6
+  progress_interval_sec: 25
+  max_turns: 120
+connector:
+  mode: external
+  name: napcat
+napcat:
+  http: http://127.0.0.1:3000
+  ws: ws://127.0.0.1:3001
+bridge:
+  enabled: false
+  respond_to_group_mentions_only: true
+  self_id: 0
+hermes:
+  command: hermes
+  disable_tools_in_sandbox: true
+commands: []
+# Example:
+# commands:
+#   - name: status
+#     type: prompt
+#     require_at: true
+#     owner_only: false
+#     prompt: "Summarize current bot status for the user."
+#   - name: disk
+#     type: exec
+#     require_at: true
+#     owner_only: true
+#     exec: ["powershell", "-NoProfile", "-Command", "Get-PSDrive -PSProvider FileSystem"]
+#     timeout_sec: 10
+models:
+  default_model: ""
+  special_model: ""
+  flash_timeout_sec: 90
+  heavy_timeout_sec: 300
+owners: []
+prompt:
+  identity: ""
+  style: ""
+security:
+  mode: sandbox
+  allow_full_for_owners_only: true
+  allow_non_owner_sensitive: false
