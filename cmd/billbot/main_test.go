@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"billbot/internal/bridge"
 	"billbot/internal/config"
 )
 
@@ -23,6 +24,12 @@ func TestSetConfigValue(t *testing.T) {
 	}
 	if !cfg.Processes.NapCat.AutoStart {
 		t.Fatal("auto_start not set")
+	}
+	if err := setConfigValue(&cfg, "bridge.enabled", "true"); err != nil {
+		t.Fatalf("set bridge enabled: %v", err)
+	}
+	if !cfg.Bridge.Enabled {
+		t.Fatal("bridge.enabled not set")
 	}
 	if err := setConfigValue(&cfg, "login.qr_command", "printf https://example.test/qr"); err != nil {
 		t.Fatalf("set qr command: %v", err)
@@ -51,6 +58,18 @@ func TestSetConfigValue(t *testing.T) {
 	if err := setConfigValue(&cfg, "models.heavy_timeout_sec", "0"); err == nil {
 		t.Fatal("expected invalid positive integer error")
 	}
+	if err := setConfigValue(&cfg, "autostart.enabled", "true"); err != nil {
+		t.Fatalf("set autostart enabled: %v", err)
+	}
+	if !cfg.Autostart.Enabled {
+		t.Fatal("autostart.enabled not set")
+	}
+	if err := setConfigValue(&cfg, "autostart.name", "BillBot Test"); err != nil {
+		t.Fatalf("set autostart name: %v", err)
+	}
+	if cfg.Autostart.Name != "BillBot Test" {
+		t.Fatalf("autostart name = %q", cfg.Autostart.Name)
+	}
 }
 
 func TestReadLogTail(t *testing.T) {
@@ -71,5 +90,14 @@ func TestNormalizeCLIInput(t *testing.T) {
 	got := normalizeCLIInput("\ufeffs\x00t\x00a\x00t\x00u\x00s\x00\r\n")
 	if got != "status" {
 		t.Fatalf("normalized input = %q", got)
+	}
+}
+
+func TestStartConfiguredBridgeHonorsEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.Bridge.Enabled = false
+	svc := bridge.NewService(cfg)
+	if err := startConfiguredBridge(cfg, svc); err != nil {
+		t.Fatalf("disabled bridge returned error: %v", err)
 	}
 }

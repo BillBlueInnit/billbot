@@ -92,6 +92,23 @@ func TestServiceStartStopIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestServiceStatusIncludesConnectorWhenStopped(t *testing.T) {
+	fake := &fakeConnector{}
+	svc := NewService(config.Default())
+	svc.connectorMaker = func(config.Config) connector.Connector {
+		return fake
+	}
+
+	status := svc.Status()
+
+	if status.Running {
+		t.Fatal("service should not be running")
+	}
+	if status.Connector == nil || status.Connector.Name != "fake" || !status.Connector.Connected {
+		t.Fatalf("connector status missing when stopped: %#v", status)
+	}
+}
+
 func TestServiceHandlesMessageAndPersistsSession(t *testing.T) {
 	fake := &fakeConnector{}
 	cfg := config.Default()

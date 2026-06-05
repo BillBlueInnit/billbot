@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"billbot/internal/autostart"
 	"billbot/internal/bridge"
 	"billbot/internal/config"
 	"billbot/internal/connector/napcat"
@@ -49,6 +50,9 @@ func main() {
 	log.Printf("billbot starting config=%s port=%d cli=%t", *configPath, cfg.Server.Port, *cliMode)
 
 	bridgeSvc := bridge.NewService(cfg)
+	if err := startConfiguredBridge(cfg, bridgeSvc); err != nil {
+		log.Printf("auto start bridge failed: %v", err)
+	}
 	if *cliMode {
 		runCLI(context.Background(), cfg, *configPath, bridgeSvc)
 		return
@@ -163,6 +167,49 @@ func main() {
 		}
 		writeJSON(w, map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(r.Context())})
 	})
+	mux.HandleFunc("/api/autostart/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		writeJSON(w, map[string]any{"autostart": autostart.NewManager().Status(cfg, autostartOptions(*configPath, cfg))})
+	})
+	mux.HandleFunc("/api/autostart/enable", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		status, err := autostart.NewManager().Enable(r.Context(), cfg, autostartOptions(*configPath, cfg))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		cfg.Autostart.Enabled = true
+		if err := config.Save(*configPath, cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		log.Printf("autostart enabled platform=%s target=%s", status.Platform, status.Target)
+		writeJSON(w, map[string]any{"ok": true, "autostart": status})
+	})
+	mux.HandleFunc("/api/autostart/disable", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		status, err := autostart.NewManager().Disable(r.Context(), cfg, autostartOptions(*configPath, cfg))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		cfg.Autostart.Enabled = false
+		if err := config.Save(*configPath, cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		log.Printf("autostart disabled platform=%s target=%s", status.Platform, status.Target)
+		writeJSON(w, map[string]any{"ok": true, "autostart": status})
+	})
 	mux.HandleFunc("/api/login/qr", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
@@ -223,11 +270,27 @@ func setupLogging(path string) {
 	log.SetOutput(io.MultiWriter(os.Stdout, file))
 }
 
+func startConfiguredBridge(cfg config.Config, bridgeSvc *bridge.Service) error {
+	if !cfg.Bridge.Enabled {
+		return nil
+	}
+	return bridgeSvc.Start()
+}
+
+func autostartOptions(configPath string, cfg config.Config) autostart.Options {
+	exe, _ := os.Executable()
+	return autostart.Options{
+		ExePath:    exe,
+		ConfigPath: configPath,
+		Port:       cfg.Server.Port,
+	}
+}
+
 func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc *bridge.Service) {
 	fmt.Println("BillBot CLI")
 	fmt.Printf("config: %s\n", configPath)
 	fmt.Printf("dashboard port: %d\n", cfg.Server.Port)
-	fmt.Println("commands: status, diag, start, stop, napcat, napcat-start, napcat-stop, qr, login, logs, set, help, quit")
+	fmt.Println("commands: status, diag, start, stop, napcat, napcat-start, napcat-stop, autostart, autostart-enable, autostart-disable, qr, login, logs, set, help, quit")
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("billbot> ")
@@ -244,6 +307,9 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 			fmt.Println("napcat  show managed NapCat process status")
 			fmt.Println("napcat-start  start configured NapCat process")
 			fmt.Println("napcat-stop   stop managed NapCat process")
+			fmt.Println("autostart  show OS autostart status")
+			fmt.Println("autostart-enable   enable OS autostart for BillBot")
+			fmt.Println("autostart-disable  disable OS autostart for BillBot")
 			fmt.Println("qr      show QQ login QR availability")
 			fmt.Println("login   show QQ login status")
 			fmt.Println("logs    show recent runtime logs")
@@ -273,6 +339,32 @@ func runCLI(ctx context.Context, cfg config.Config, configPath string, bridgeSvc
 				continue
 			}
 			printJSON(map[string]any{"ok": true, "napcat_process": bridgeSvc.NapCatProcessStatus(ctx)})
+		case "autostart":
+			printJSON(map[string]any{"autostart": autostart.NewManager().Status(cfg, autostartOptions(configPath, cfg))})
+		case "autostart-enable":
+			status, err := autostart.NewManager().Enable(ctx, cfg, autostartOptions(configPath, cfg))
+			if err != nil {
+				fmt.Printf("autostart enable failed: %v\n", err)
+				continue
+			}
+			cfg.Autostart.Enabled = true
+			if err := config.Save(configPath, cfg); err != nil {
+				fmt.Printf("save failed: %v\n", err)
+				continue
+			}
+			printJSON(map[string]any{"ok": true, "autostart": status})
+		case "autostart-disable":
+			status, err := autostart.NewManager().Disable(ctx, cfg, autostartOptions(configPath, cfg))
+			if err != nil {
+				fmt.Printf("autostart disable failed: %v\n", err)
+				continue
+			}
+			cfg.Autostart.Enabled = false
+			if err := config.Save(configPath, cfg); err != nil {
+				fmt.Printf("save failed: %v\n", err)
+				continue
+			}
+			printJSON(map[string]any{"ok": true, "autostart": status})
 		case "start":
 			if err := bridgeSvc.Start(); err != nil {
 				fmt.Printf("start failed: %v\n", err)
@@ -447,18 +539,76 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 		cfg.Login.StatusCommand = strings.Fields(value)
 	case "processes.napcat.command":
 		cfg.Processes.NapCat.Command = value
+	case "processes.napcat.args":
+		cfg.Processes.NapCat.Args = strings.Fields(value)
+	case "processes.napcat.work_dir":
+		cfg.Processes.NapCat.WorkDir = value
+	case "processes.napcat.wait_http":
+		cfg.Processes.NapCat.WaitHTTP = value
+	case "processes.napcat.wait_timeout_sec":
+		v, err := parsePositiveInt(value)
+		if err != nil {
+			return err
+		}
+		cfg.Processes.NapCat.WaitTimeout = v
 	case "processes.napcat.auto_start":
 		v, err := strconv.ParseBool(value)
 		if err != nil {
 			return err
 		}
 		cfg.Processes.NapCat.AutoStart = v
+	case "processes.napcat.stop_on_exit":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Processes.NapCat.StopOnExit = v
+	case "bridge.enabled":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Bridge.Enabled = v
+	case "bridge.respond_to_group_mentions_only":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Bridge.RespondToGroupMentionsOnly = v
 	case "bridge.self_id":
 		v, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return err
 		}
 		cfg.Bridge.SelfID = v
+	case "hermes.disable_tools_in_sandbox":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Hermes.DisableToolsInSandbox = v
+	case "security.mode":
+		cfg.Security.Mode = value
+	case "security.allow_full_for_owners_only":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Security.AllowFullForOwnersOnly = v
+	case "security.allow_non_owner_sensitive":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Security.AllowNonOwnerSensitive = v
+	case "autostart.enabled":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Autostart.Enabled = v
+	case "autostart.name":
+		cfg.Autostart.Name = value
 	default:
 		return fmt.Errorf("unsupported config key %q", key)
 	}

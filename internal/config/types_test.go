@@ -28,6 +28,9 @@ func TestNormalizeFillsV01Defaults(t *testing.T) {
 	if cfg.Security.Mode != "sandbox" {
 		t.Fatalf("security mode = %q, want sandbox", cfg.Security.Mode)
 	}
+	if cfg.Autostart.Name != "BillBot" {
+		t.Fatalf("autostart name = %q, want BillBot", cfg.Autostart.Name)
+	}
 }
 
 func TestSavePreservesUnknownFields(t *testing.T) {

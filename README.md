@@ -47,6 +47,17 @@ CLI mode:
 ./bin/billbot --cli --port 2006
 ```
 
+OS autostart:
+
+```bash
+./bin/billbot --cli
+billbot> autostart
+billbot> autostart-enable
+```
+
+Windows autostart writes a current-user Registry `Run` entry. Linux autostart writes and enables a systemd user service. These controls start BillBot itself; NapCat remains external and is managed through `processes.napcat`.
+Autostart always launches dashboard mode, even when configured from CLI, so it can run unattended after login.
+
 Use a config file:
 
 ```bash

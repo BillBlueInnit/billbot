@@ -71,3 +71,6 @@ security:
   mode: sandbox
   allow_full_for_owners_only: true
   allow_non_owner_sensitive: false
+autostart:
+  enabled: false
+  name: BillBot

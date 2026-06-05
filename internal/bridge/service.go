@@ -125,8 +125,12 @@ func (s *Service) Stop() error {
 func (s *Service) Status() Status {
 	s.mu.Lock()
 	conn := s.conn
+	cfg := s.cfg
 	out := Status{Running: s.running, LastError: s.lastError}
 	s.mu.Unlock()
+	if conn == nil {
+		conn = s.connectorMaker(cfg)
+	}
 	if conn != nil {
 		status, err := conn.Status()
 		if err != nil {

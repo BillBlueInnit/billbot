@@ -52,6 +52,8 @@ Current state
 - QQ login QR/status support is implemented through operator-configured external argv arrays: `login.qr_command` and `login.status_command`. These commands may call a locally installed NapCat launcher or a supported local API path, but BillBot must not depend on NapCat WebUI and must not bundle NapCat artifacts.
 - NapCat process control is exposed through dashboard, CLI, and `/api/processes/napcat/*` using the user-configured local command only; BillBot still treats NapCat as external software.
 - CLI config editing now covers model routing timeout fields, special model, and runtime progress/session timing fields so routing/progress can be configured without a browser.
+- BillBot OS autostart can be managed from CLI, dashboard, and `/api/autostart/*`. Windows uses the current-user Registry Run key. Linux uses a systemd user service. Autostart controls BillBot only; NapCat still remains an external dependency controlled through `processes.napcat`.
+- OS autostart should launch BillBot in dashboard/bridge mode, not interactive `--cli` mode, even when configured from CLI.
 
 Verified commands
 
@@ -381,6 +383,7 @@ Cross-platform and Ubuntu target:
 - Windows-specific and Linux-specific launch commands may be configured by the user through `processes.napcat.command` and `processes.napcat.args`.
 - Tests and builds should pass on Ubuntu with standard `go test ./...` and `go build ./cmd/billbot`.
 - Install helpers must prefer POSIX shell on Linux and keep PowerShell examples Windows-only.
+- OS autostart should use platform-native mechanisms: current-user Registry Run key on Windows and systemd user services on Linux. Do not require administrator/root privileges for the default path.
 
 Install helpers:
 - BillBot may provide helper scripts for Hermes and NapCat installation.

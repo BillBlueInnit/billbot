@@ -25,6 +25,7 @@ type Config struct {
 	Owners    []int64         `json:"owners" yaml:"owners"`
 	Prompt    PromptConfig    `json:"prompt" yaml:"prompt"`
 	Security  SecurityConfig  `json:"security" yaml:"security"`
+	Autostart AutostartConfig `json:"autostart" yaml:"autostart"`
 }
 
 type ServerConfig struct {
@@ -122,6 +123,11 @@ type SecurityConfig struct {
 	AllowNonOwnerSensitive bool   `json:"allow_non_owner_sensitive" yaml:"allow_non_owner_sensitive"`
 }
 
+type AutostartConfig struct {
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Name    string `json:"name" yaml:"name"`
+}
+
 func AppDir() string {
 	if v := os.Getenv("BILLBOT_HOME"); v != "" {
 		return v
@@ -162,6 +168,7 @@ func Default() Config {
 		Owners:    []int64{},
 		Prompt:    PromptConfig{},
 		Security:  SecurityConfig{Mode: "sandbox", AllowFullForOwnersOnly: true},
+		Autostart: AutostartConfig{Name: "BillBot"},
 	}
 }
 
@@ -330,5 +337,8 @@ func (c *Config) Normalize() {
 	}
 	if c.Security.Mode == "" {
 		c.Security.Mode = def.Security.Mode
+	}
+	if c.Autostart.Name == "" {
+		c.Autostart.Name = def.Autostart.Name
 	}
 }

@@ -70,6 +70,19 @@
       </section>
 
       <section class="panel wide">
+        <h2>Autostart</h2>
+        <pre id="autostartStatus" class="status">loading...</pre>
+        <div class="grid">
+          <div><label for="autostart_enabled">Config enabled</label><select id="autostart_enabled"><option value="false">false</option><option value="true">true</option></select></div>
+          <div><label for="autostart_name">Service name</label><input id="autostart_name" autocomplete="off" /></div>
+        </div>
+        <div class="actions">
+          <button id="enableAutostartBtn" class="secondary">Enable OS Autostart</button>
+          <button id="disableAutostartBtn" class="danger">Disable OS Autostart</button>
+        </div>
+      </section>
+
+      <section class="panel wide">
         <h2>Basic Config</h2>
         <div class="grid">
           <div><label for="name">Bot name</label><input id="name" autocomplete="off" /></div>
@@ -77,6 +90,7 @@
           <div><label for="napcat_http">NapCat HTTP</label><input id="napcat_http" autocomplete="off" /></div>
           <div><label for="napcat_ws">NapCat WebSocket</label><input id="napcat_ws" autocomplete="off" /></div>
           <div><label for="hermes_command">Hermes command</label><input id="hermes_command" autocomplete="off" /></div>
+          <div><label for="bridge_enabled">Bridge auto start</label><select id="bridge_enabled"><option value="false">false</option><option value="true">true</option></select></div>
           <div><label for="self_id">Bot self QQ ID</label><input id="self_id" type="number" min="0" /></div>
         </div>
         <label for="owners">Owners JSON array</label>
@@ -113,6 +127,8 @@
           <div><label for="strong_model">Strong model</label><input id="strong_model" autocomplete="off" /></div>
           <div><label for="special_model">Special model</label><input id="special_model" autocomplete="off" /></div>
           <div><label for="routing_timeout">Routing timeout seconds</label><input id="routing_timeout" type="number" min="1" /></div>
+          <div><label for="flash_timeout">Flash timeout seconds</label><input id="flash_timeout" type="number" min="1" /></div>
+          <div><label for="heavy_timeout">Heavy timeout seconds</label><input id="heavy_timeout" type="number" min="1" /></div>
         </div>
       </section>
 
@@ -124,6 +140,16 @@
         <select id="group_mentions_only"><option value="true">only when mentioned</option><option value="false">all group messages</option></select>
         <label for="disable_tools">Sandbox tools</label>
         <select id="disable_tools"><option value="true">disable tools in sandbox</option><option value="false">allow Hermes defaults</option></select>
+      </section>
+
+      <section class="panel">
+        <h2>Runtime</h2>
+        <label for="start_notice_delay">Working notice delay seconds</label>
+        <input id="start_notice_delay" type="number" min="1" />
+        <label for="progress_interval">Progress interval seconds</label>
+        <input id="progress_interval" type="number" min="1" />
+        <label for="max_turns">Max turns per session</label>
+        <input id="max_turns" type="number" min="1" />
       </section>
 
       <section class="panel">
@@ -181,20 +207,24 @@
     }
 
     async function refresh() {
-      const [health, cfg, connector, bridge, napcatProcess] = await Promise.all([
-        getJSON('/api/health'), getJSON('/api/config'), getJSON('/api/connectors/status'), getJSON('/api/bridge/status'), getJSON('/api/processes/napcat/status')
+      const [health, cfg, connector, bridge, napcatProcess, autostart] = await Promise.all([
+        getJSON('/api/health'), getJSON('/api/config'), getJSON('/api/connectors/status'), getJSON('/api/bridge/status'), getJSON('/api/processes/napcat/status'), getJSON('/api/autostart/status')
       ])
       current = cfg.config
       el('health').textContent = JSON.stringify(health, null, 2)
       el('connectorStatus').textContent = JSON.stringify(connector.connectors, null, 2)
       el('bridgeStatus').textContent = JSON.stringify(bridge.bridge, null, 2)
       el('napcatProcessStatus').textContent = JSON.stringify(napcatProcess.napcat_process, null, 2)
+      el('autostartStatus').textContent = JSON.stringify(autostart.autostart, null, 2)
 
       el('name').value = current.name || ''
       el('port').value = current.server?.port || 2006
       el('napcat_http').value = current.napcat?.http || ''
       el('napcat_ws').value = current.napcat?.ws || ''
       el('hermes_command').value = current.hermes?.command || 'hermes'
+      el('bridge_enabled').value = String(current.bridge?.enabled ?? false)
+      el('autostart_enabled').value = String(current.autostart?.enabled ?? false)
+      el('autostart_name').value = current.autostart?.name || 'BillBot'
       el('self_id').value = current.bridge?.self_id || 0
       el('owners').value = JSON.stringify(current.owners || [], null, 2)
       el('default_provider').value = current.models?.default_provider || ''
@@ -205,12 +235,17 @@
       el('strong_model').value = current.models?.strong_model || ''
       el('special_model').value = current.models?.special_model || ''
       el('routing_timeout').value = current.models?.routing_timeout_sec || 30
+      el('flash_timeout').value = current.models?.flash_timeout_sec || 90
+      el('heavy_timeout').value = current.models?.heavy_timeout_sec || 300
       el('identity').value = current.prompt?.identity || ''
       el('style').value = current.prompt?.style || ''
       el('commands').value = JSON.stringify(current.commands || [], null, 2)
       el('mode').value = current.security?.mode || 'sandbox'
       el('group_mentions_only').value = String(current.bridge?.respond_to_group_mentions_only ?? true)
       el('disable_tools').value = String(current.hermes?.disable_tools_in_sandbox ?? true)
+      el('start_notice_delay').value = current.runtime?.start_notice_delay_sec || 6
+      el('progress_interval').value = current.runtime?.progress_interval_sec || 25
+      el('max_turns').value = current.runtime?.max_turns || 120
       el('qr_command').value = JSON.stringify(current.login?.qr_command || [], null, 2)
       el('login_status_command').value = JSON.stringify(current.login?.status_command || [], null, 2)
       el('qr_timeout').value = current.login?.qr_timeout_sec || 30
@@ -258,6 +293,7 @@
         payload.hermes.command = el('hermes_command').value
         payload.hermes.disable_tools_in_sandbox = el('disable_tools').value === 'true'
         payload.bridge = payload.bridge || {}
+        payload.bridge.enabled = el('bridge_enabled').value === 'true'
         payload.bridge.self_id = Number(el('self_id').value || 0)
         payload.bridge.respond_to_group_mentions_only = el('group_mentions_only').value === 'true'
         payload.login = payload.login || {}
@@ -273,6 +309,12 @@
         payload.models.strong_model = el('strong_model').value
         payload.models.special_model = el('special_model').value
         payload.models.routing_timeout_sec = Number(el('routing_timeout').value || 30)
+        payload.models.flash_timeout_sec = Number(el('flash_timeout').value || 90)
+        payload.models.heavy_timeout_sec = Number(el('heavy_timeout').value || 300)
+        payload.runtime = payload.runtime || {}
+        payload.runtime.start_notice_delay_sec = Number(el('start_notice_delay').value || 6)
+        payload.runtime.progress_interval_sec = Number(el('progress_interval').value || 25)
+        payload.runtime.max_turns = Number(el('max_turns').value || 120)
         payload.owners = owners.map(Number)
         payload.prompt = payload.prompt || {}
         payload.prompt.identity = el('identity').value
@@ -280,6 +322,9 @@
         payload.commands = commands
         payload.security = payload.security || {}
         payload.security.mode = el('mode').value
+        payload.autostart = payload.autostart || {}
+        payload.autostart.enabled = el('autostart_enabled').value === 'true'
+        payload.autostart.name = el('autostart_name').value
         const out = await postJSON('/api/config', payload)
         current = out.config
         message.textContent = 'saved'
@@ -299,6 +344,11 @@
     async function napcatAction(action) {
       el('message').textContent = ''
       try { await postJSON(`/api/processes/napcat/${action}`); await refresh() } catch (err) { el('message').textContent = String(err.message || err) }
+    }
+
+    async function autostartAction(action) {
+      el('message').textContent = ''
+      try { await postJSON(`/api/autostart/${action}`); await refresh() } catch (err) { el('message').textContent = String(err.message || err) }
     }
 
     async function runDiagnostics() {
@@ -327,6 +377,8 @@
     el('stopBridgeBtn').onclick = () => bridgeAction('stop')
     el('startNapcatBtn').onclick = () => napcatAction('start')
     el('stopNapcatBtn').onclick = () => napcatAction('stop')
+    el('enableAutostartBtn').onclick = () => autostartAction('enable')
+    el('disableAutostartBtn').onclick = () => autostartAction('disable')
     el('diagnosticsBtn').onclick = runDiagnostics
     el('qrBtn').onclick = renderQR
     el('loginStatusBtn').onclick = loginStatus
