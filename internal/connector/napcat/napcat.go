@@ -261,11 +261,11 @@ func ParseMessageEvent(raw []byte) (connector.Message, bool) {
 	if event.PostType != "message" {
 		return connector.Message{}, false
 	}
-	text := event.RawMessage
-	if text == "" {
-		text = messageText(event.Message)
+	text, attachments := messageContent(event.Message)
+	if event.RawMessage != "" {
+		text = event.RawMessage
 	}
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
 		return connector.Message{}, false
 	}
 
@@ -277,36 +277,75 @@ func ParseMessageEvent(raw []byte) (connector.Message, bool) {
 		chatID = "group:" + groupID
 	}
 	return connector.Message{
-		Platform: connector.PlatformQQ,
-		BotID:    rawID(event.SelfID),
-		ChatID:   chatID,
-		UserID:   userID,
-		GroupID:  groupID,
-		Private:  private,
-		Text:     text,
-		Raw:      append([]byte(nil), raw...),
+		Platform:    connector.PlatformQQ,
+		BotID:       rawID(event.SelfID),
+		ChatID:      chatID,
+		UserID:      userID,
+		GroupID:     groupID,
+		Private:     private,
+		Text:        text,
+		Attachments: attachments,
+		Raw:         append([]byte(nil), raw...),
 	}, true
 }
 
-func messageText(v any) string {
+func messageContent(v any) (string, []connector.Attachment) {
 	switch msg := v.(type) {
 	case string:
-		return msg
+		return msg, nil
 	case []any:
 		var b strings.Builder
+		var attachments []connector.Attachment
 		for _, item := range msg {
 			part, ok := item.(map[string]any)
-			if !ok || part["type"] != "text" {
+			if !ok {
 				continue
 			}
+			typ, _ := part["type"].(string)
 			data, _ := part["data"].(map[string]any)
-			text, _ := data["text"].(string)
-			b.WriteString(text)
+			switch typ {
+			case "text":
+				text, _ := data["text"].(string)
+				b.WriteString(text)
+			case "image", "file", "record", "video":
+				attachments = append(attachments, attachmentFromSegment(typ, data))
+			}
 		}
-		return b.String()
+		return b.String(), attachments
 	default:
-		return ""
+		return "", nil
 	}
+}
+
+func attachmentFromSegment(typ string, data map[string]any) connector.Attachment {
+	att := connector.Attachment{Type: typ}
+	for _, key := range []string{"url", "file", "file_id", "name", "summary"} {
+		value, _ := data[key].(string)
+		if value == "" {
+			continue
+		}
+		switch key {
+		case "url":
+			att.URL = value
+		case "file", "file_id":
+			if att.File == "" {
+				att.File = value
+			}
+		case "name":
+			att.Name = value
+		case "summary":
+			att.Summary = value
+		}
+	}
+	if att.Name == "" {
+		att.Name, _ = data["filename"].(string)
+	}
+	return att
+}
+
+func messageText(v any) string {
+	text, _ := messageContent(v)
+	return text
 }
 
 func rawID(raw json.RawMessage) string {

@@ -45,3 +45,24 @@ func TestStoreResetsAtMaxTurns(t *testing.T) {
 		t.Fatalf("session was not reset: %#v", session)
 	}
 }
+
+func TestStoreClearPersistsEmptySessions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	store := NewStore(path, 3)
+	key := Key("qq", "private:10001", "10001")
+
+	if err := store.Put(key, Session{ID: "abc", Turns: 1}); err != nil {
+		t.Fatalf("put failed: %v", err)
+	}
+	if err := store.Clear(); err != nil {
+		t.Fatalf("clear failed: %v", err)
+	}
+
+	reloaded := NewStore(path, 3)
+	if err := reloaded.Load(); err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+	if _, ok := reloaded.Get(key); ok {
+		t.Fatal("session was not cleared")
+	}
+}

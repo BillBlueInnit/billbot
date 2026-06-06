@@ -102,6 +102,13 @@ func (s *Store) Reset(key string) error {
 	return s.saveLocked()
 }
 
+func (s *Store) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items = map[string]Session{}
+	return s.saveLocked()
+}
+
 func (s *Store) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
 		return err

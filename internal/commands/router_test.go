@@ -31,7 +31,7 @@ func TestHandleRequiresAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	if !result.Handled || !strings.Contains(result.Reply, "requires @bot") {
+	if !result.Handled || !strings.Contains(result.Reply, "需要先 @机器人") {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }
@@ -45,7 +45,7 @@ func TestHandleExecRequiresOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle: %v", err)
 	}
-	if !result.Handled || !strings.Contains(result.Reply, "requires owner") {
+	if !result.Handled || !strings.Contains(result.Reply, "需要管理员权限") {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 }

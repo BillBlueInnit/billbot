@@ -9,15 +9,26 @@ const (
 )
 
 type Message struct {
-	Platform Platform `json:"platform"`
-	BotID    string   `json:"bot_id"`
-	ChatID   string   `json:"chat_id"`
-	UserID   string   `json:"user_id"`
-	GroupID  string   `json:"group_id,omitempty"`
-	Private  bool     `json:"private"`
-	Text     string   `json:"text"`
-	Mention  bool     `json:"mention,omitempty"`
-	Raw      []byte   `json:"raw,omitempty"`
+	Platform    Platform     `json:"platform"`
+	BotID       string       `json:"bot_id"`
+	ChatID      string       `json:"chat_id"`
+	UserID      string       `json:"user_id"`
+	GroupID     string       `json:"group_id,omitempty"`
+	Private     bool         `json:"private"`
+	Text        string       `json:"text"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	TrustedRole string       `json:"trusted_role,omitempty"`
+	AdminToken  string       `json:"admin_token,omitempty"`
+	Mention     bool         `json:"mention,omitempty"`
+	Raw         []byte       `json:"raw,omitempty"`
+}
+
+type Attachment struct {
+	Type    string `json:"type"`
+	URL     string `json:"url,omitempty"`
+	File    string `json:"file,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type Status struct {

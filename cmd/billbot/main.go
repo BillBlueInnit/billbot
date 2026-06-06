@@ -100,6 +100,7 @@ func generatedConfigDefaults(path string, cfg config.Config) config.Config {
 	cfg.Runtime.OutboxDir = filepath.Join(runtimeDir, "outbox")
 	cfg.Runtime.TmpDir = filepath.Join(runtimeDir, "tmp")
 	cfg.Runtime.SandboxDir = filepath.Join(runtimeDir, "sandbox")
+	cfg.Hermes.ProfileDir = filepath.Join(runtimeDir, "hermes-profile")
 	return cfg
 }
 
@@ -230,15 +231,15 @@ func runInteractiveCLI(ctx context.Context, state *cliState) {
 func (s *cliState) Execute(ctx context.Context, rawLine string) (output string, quit bool, clear bool) {
 	line := normalizeCLIInput(rawLine)
 	lower := strings.ToLower(line)
-	if lower == "" || lower == "help" || lower == "?" {
+	if lower == "" || lower == "help" || lower == "?" || lower == "帮助" || lower == "菜单" {
 		return helpText(), false, false
 	}
-	if lower == "clear" || lower == "cls" {
+	if lower == "clear" || lower == "cls" || lower == "清屏" {
 		return "", false, true
 	}
-	if lower == "quit" || lower == "exit" {
+	if lower == "quit" || lower == "exit" || lower == "退出" {
 		_ = s.bridgeSvc.Stop()
-		return "bye", true, false
+		return "已退出。", true, false
 	}
 
 	s.mu.Lock()
@@ -246,48 +247,48 @@ func (s *cliState) Execute(ctx context.Context, rawLine string) (output string, 
 	s.mu.Unlock()
 
 	switch lower {
-	case "status":
+	case "status", "状态":
 		return formatJSON(map[string]any{
 			"bridge":  s.bridgeSvc.Status(),
 			"routing": routingSummary(cfg),
 		}), false, false
-	case "diag":
+	case "diag", "诊断":
 		report := diagnostics.Run(ctx, cfg)
 		log.Printf("diagnostics napcat_http=%t napcat_ws=%t hermes_found=%t hermes_status=%t hermes_chat=%t", report.NapCat.HTTPReachable, report.NapCat.WSReachable, report.Hermes.CommandFound, report.Hermes.StatusOK, report.Hermes.ChatOK)
 		return formatJSON(map[string]any{"diagnostics": report}), false, false
-	case "route":
+	case "route", "路由":
 		return formatJSON(map[string]any{"routing": routingSummary(cfg)}), false, false
-	case "route off", "routing off", "model default", "models default":
+	case "route off", "routing off", "model default", "models default", "关闭路由", "路由关闭":
 		return s.disableRouting(), false, false
-	case "start":
+	case "start", "启动":
 		if err := s.bridgeSvc.Start(); err != nil {
-			return "start failed: " + err.Error(), false, false
+			return "启动失败：" + err.Error(), false, false
 		}
 		return formatJSON(map[string]any{"ok": true, "bridge": s.bridgeSvc.Status()}), false, false
-	case "stop":
+	case "stop", "停止":
 		if err := s.bridgeSvc.Stop(); err != nil {
-			return "stop failed: " + err.Error(), false, false
+			return "停止失败：" + err.Error(), false, false
 		}
 		return formatJSON(map[string]any{"ok": true, "bridge": s.bridgeSvc.Status()}), false, false
-	case "logs":
+	case "logs", "日志":
 		text, err := readLogTail(cfg.Runtime.LogFile, 65536)
 		if err != nil {
-			return "logs failed: " + err.Error(), false, false
+			return "读取日志失败：" + err.Error(), false, false
 		}
 		return text, false, false
 	}
 
-	if strings.HasPrefix(lower, "set ") {
+	if strings.HasPrefix(lower, "set ") || strings.HasPrefix(line, "设置 ") {
 		parts := strings.SplitN(line, " ", 3)
 		if len(parts) != 3 {
-			return "usage: set KEY VALUE", false, false
+			return "用法：set KEY VALUE", false, false
 		}
 		return s.setValue(parts[1], parts[2]), false, false
 	}
 	if key, value, ok := simpleSet(line); ok {
 		return s.setValue(key, value), false, false
 	}
-	return "unknown command; type help", false, false
+	return "未知指令；输入 help 查看帮助。", false, false
 }
 
 func simpleSet(line string) (string, string, bool) {
@@ -296,7 +297,7 @@ func simpleSet(line string) (string, string, bool) {
 		return "", "", false
 	}
 	switch strings.ToLower(parts[0]) {
-	case "qq", "self_id", "admin", "owner", "token", "http_token", "ws_token", "http", "ws", "hermes":
+	case "qq", "self_id", "机器人", "admin", "owner", "管理员", "token", "令牌", "http_token", "ws_token", "http", "ws", "hermes":
 		return parts[0], parts[1], true
 	default:
 		return "", "", false
@@ -308,16 +309,16 @@ func (s *cliState) setValue(key string, value string) string {
 	next := s.cfg
 	s.mu.Unlock()
 	if err := setConfigValue(&next, key, value); err != nil {
-		return "set failed: " + err.Error()
+		return "设置失败：" + err.Error()
 	}
 	if err := config.Save(s.configPath, next); err != nil {
-		return "save failed: " + err.Error()
+		return "保存失败：" + err.Error()
 	}
 	s.mu.Lock()
 	s.cfg = next
 	s.mu.Unlock()
 	s.bridgeSvc.UpdateConfig(next)
-	return "saved " + canonicalConfigKey(key)
+	return "已保存 " + canonicalConfigKey(key)
 }
 
 func (s *cliState) disableRouting() string {
@@ -332,39 +333,39 @@ func (s *cliState) disableRouting() string {
 	next.Models.StrongModel = ""
 	next.Models.SpecialModel = ""
 	if err := config.Save(s.configPath, next); err != nil {
-		return "save failed: " + err.Error()
+		return "保存失败：" + err.Error()
 	}
 	s.mu.Lock()
 	s.cfg = next
 	s.mu.Unlock()
 	s.bridgeSvc.UpdateConfig(next)
-	return "routing disabled; Hermes default model will be used"
+	return "已关闭模型路由；将使用 Hermes 默认模型。"
 }
 
 func helpText() string {
-	return strings.TrimSpace(`Commands:
-  start / stop          start or stop bridge
-  status                show bridge and routing status
-  diag                  test NapCat HTTP/WS and Hermes
-  route                 show Hermes routing config
-  route off             clear model overrides and use Hermes default model
-  logs                  show recent log tail
-  clear                 clear the screen
-  set qq <bot_qq>       save bridge self QQ number
-  set admin <qq>        save admin/owner QQ number
-  set token <token>     save the same NapCat token for HTTP and WS
-  set http_token <tok>  save only NapCat HTTP token
-  set ws_token <tok>    save only NapCat WS token
-  set http <url>        save NapCat HTTP endpoint
-  set ws <url>          save NapCat WS endpoint
-  set hermes <command>  save Hermes command
-  set KEY VALUE         save any supported config key
-  qq <bot_qq>           shortcut for set qq
-  admin <qq>            shortcut for set admin
-  token <token>         shortcut for set token
-  quit                  exit
+	return strings.TrimSpace(`BillBot CLI 指令：
+  start / stop          启动或停止 bridge
+  status                查看 bridge 和模型路由状态
+  diag                  检查 NapCat HTTP/WS 和 Hermes
+  route                 查看 Hermes 路由配置
+  route off             关闭模型路由，使用 Hermes 默认模型
+  logs                  查看最近日志
+  clear                 清屏
+  set qq <bot_qq>       保存机器人 QQ 号
+  set admin <qq>        保存管理员/owner QQ 号
+  set token <token>     保存 NapCat HTTP/WS 共用 token
+  set http_token <tok>  只保存 NapCat HTTP token
+  set ws_token <tok>    只保存 NapCat WS token
+  set http <url>        保存 NapCat HTTP 地址
+  set ws <url>          保存 NapCat WS 地址
+  set hermes <command>  保存 Hermes 命令
+  set KEY VALUE         保存支持的配置项
+  qq <bot_qq>           等同 set qq
+  admin <qq>            等同 set admin
+  token <token>         等同 set token
+  quit                  退出
 
-Keys: Up/Down history. Use clear to clear screen. Paste with your terminal shortcut, usually Ctrl+Shift+V or right click.`)
+按上下键查看历史。粘贴请用终端快捷键，通常是 Ctrl+Shift+V 或右键。`)
 }
 
 func clearScreen() {
@@ -456,6 +457,20 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 			return err
 		}
 		cfg.Hermes.Persistent = v
+	case "hermes.require_persistent":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Hermes.RequirePersistent = v
+	case "hermes.profile_dir":
+		cfg.Hermes.ProfileDir = value
+	case "hermes.reset_profile_on_start":
+		v, err := strconv.ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.Hermes.ResetProfileOnStart = v
 	case "models.default_provider":
 		cfg.Models.DefaultProvider = value
 	case "models.default_model":
@@ -576,6 +591,14 @@ func setConfigValue(cfg *config.Config, key string, value string) error {
 			return err
 		}
 		cfg.Security.AllowNonOwnerSensitive = v
+	case "security.sandbox_backend":
+		cfg.Security.SandboxBackend = value
+	case "security.sandbox_command":
+		cfg.Security.SandboxCommand = strings.Fields(value)
+	case "security.sandbox_docker_image":
+		cfg.Security.SandboxDockerImage = value
+	case "security.sandbox_docker_args":
+		cfg.Security.SandboxDockerArgs = strings.Fields(value)
 	default:
 		return fmt.Errorf("unsupported config key %q", key)
 	}
@@ -595,11 +618,11 @@ func normalizeSetValue(value string) string {
 
 func canonicalConfigKey(key string) string {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "qq", "self_id", "bot", "bot_qq":
+	case "qq", "self_id", "bot", "bot_qq", "机器人":
 		return "bridge.self_id"
-	case "admin", "owner":
+	case "admin", "owner", "管理员":
 		return "admin"
-	case "token", "napcat.token":
+	case "token", "napcat.token", "令牌":
 		return "napcat.token"
 	case "access_token":
 		return "napcat.access_token"

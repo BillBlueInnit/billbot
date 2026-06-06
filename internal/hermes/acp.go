@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var acpPool = struct {
@@ -24,32 +25,73 @@ func askPersistentACP(ctx context.Context, command string, prompt string, opts O
 	if command == "" {
 		command = "hermes"
 	}
-	client, err := acpClientFor(ctx, command)
+	key := acpPoolKey(command, opts)
+	client, err := acpClientFor(ctx, key, command, opts)
 	if err != nil {
 		return "", "", err
 	}
-	return client.ask(ctx, prompt, opts)
+	reply, sessionID, err := client.ask(ctx, prompt, opts)
+	if err != nil {
+		dropACPClient(key, client)
+		client.stop()
+	}
+	return reply, sessionID, err
 }
 
-func acpClientFor(ctx context.Context, command string) (*acpClient, error) {
+func acpPoolKey(command string, opts Options) string {
+	return strings.Join([]string{
+		command,
+		opts.SandboxDir,
+		opts.SecurityMode,
+		opts.SandboxBackend,
+		strings.Join(opts.SandboxCommand, "\x01"),
+		opts.SandboxDockerImage,
+		strings.Join(opts.SandboxDockerArgs, "\x01"),
+		opts.Provider,
+		opts.Model,
+	}, "\x00")
+}
+
+func acpClientFor(ctx context.Context, key string, command string, opts Options) (*acpClient, error) {
 	acpPool.Lock()
-	client := acpPool.clients[command]
+	client := acpPool.clients[key]
 	if client != nil && client.isRunning() {
 		acpPool.Unlock()
 		return client, nil
 	}
 	client = newACPClient(command)
-	acpPool.clients[command] = client
+	acpPool.clients[key] = client
 	acpPool.Unlock()
-	if err := client.start(ctx); err != nil {
+	if err := client.start(ctx, opts); err != nil {
 		acpPool.Lock()
-		if acpPool.clients[command] == client {
-			delete(acpPool.clients, command)
+		if acpPool.clients[key] == client {
+			delete(acpPool.clients, key)
 		}
 		acpPool.Unlock()
 		return nil, err
 	}
 	return client, nil
+}
+
+func dropACPClient(key string, client *acpClient) {
+	acpPool.Lock()
+	if acpPool.clients[key] == client {
+		delete(acpPool.clients, key)
+	}
+	acpPool.Unlock()
+}
+
+func ClosePersistentACP() {
+	acpPool.Lock()
+	clients := make([]*acpClient, 0, len(acpPool.clients))
+	for key, client := range acpPool.clients {
+		clients = append(clients, client)
+		delete(acpPool.clients, key)
+	}
+	acpPool.Unlock()
+	for _, client := range clients {
+		client.stop()
+	}
 }
 
 type acpClient struct {
@@ -67,6 +109,7 @@ type acpClient struct {
 	currentMu     sync.Mutex
 	currentPrompt int64
 	currentText   strings.Builder
+	currentTouch  chan struct{}
 }
 
 type acpResponse struct {
@@ -88,8 +131,21 @@ func (c *acpClient) isRunning() bool {
 	return c.running.Load()
 }
 
-func (c *acpClient) start(ctx context.Context) error {
-	cmd := exec.CommandContext(ctx, c.command, "acp", "--accept-hooks")
+func (c *acpClient) stop() {
+	c.running.Store(false)
+	if c.stdin != nil {
+		_ = c.stdin.Close()
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+}
+
+func (c *acpClient) start(ctx context.Context, opts Options) error {
+	argv := hermesArgv(c.command, []string{"acp", "--accept-hooks"})
+	argv = applySandboxBackendArgv(argv, opts)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	applyHermesRuntime(cmd, opts)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -148,26 +204,81 @@ func (c *acpClient) ask(ctx context.Context, prompt string, opts Options) (strin
 	c.currentMu.Lock()
 	c.currentPrompt = promptID
 	c.currentText.Reset()
+	c.currentTouch = make(chan struct{}, 1)
+	touch := c.currentTouch
 	c.currentMu.Unlock()
 
-	_, err := c.callWithID(ctx, promptID, "session/prompt", map[string]any{
+	raw, err := c.callWithIDOrText(ctx, promptID, "session/prompt", map[string]any{
 		"sessionId": sessionID,
-		"prompt": []map[string]any{
-			{"type": "text", "text": prompt},
-		},
-	})
+		"prompt":    acpPromptContent(prompt, opts.Attachments),
+	}, touch, 1200*time.Millisecond)
 	c.currentMu.Lock()
 	text := strings.TrimSpace(c.currentText.String())
 	c.currentPrompt = 0
 	c.currentText.Reset()
+	c.currentTouch = nil
 	c.currentMu.Unlock()
 	if err != nil {
 		return text, sessionID, err
 	}
 	if text == "" {
+		text = strings.TrimSpace(extractACPTextFromJSON(raw))
+	}
+	if text == "" {
 		return "", sessionID, fmt.Errorf("hermes acp returned no final text")
 	}
 	return text, sessionID, nil
+}
+
+func acpPromptContent(prompt string, attachments []Attachment) []map[string]any {
+	blocks := []map[string]any{{"type": "text", "text": prompt}}
+	for _, att := range attachments {
+		block, ok := acpAttachmentBlock(att)
+		if ok {
+			blocks = append(blocks, block)
+		}
+	}
+	return blocks
+}
+
+func acpAttachmentBlock(att Attachment) (map[string]any, bool) {
+	typ := strings.ToLower(strings.TrimSpace(att.Type))
+	url := strings.TrimSpace(att.URL)
+	file := strings.TrimSpace(att.File)
+	name := strings.TrimSpace(att.Name)
+	switch typ {
+	case "image":
+		if url != "" {
+			block := map[string]any{"type": "image", "url": url}
+			if name != "" {
+				block["name"] = name
+			}
+			return block, true
+		}
+		if file != "" {
+			block := map[string]any{"type": "image", "path": file}
+			if name != "" {
+				block["name"] = name
+			}
+			return block, true
+		}
+	case "file", "record", "video":
+		if url != "" {
+			block := map[string]any{"type": "file", "url": url}
+			if name != "" {
+				block["name"] = name
+			}
+			return block, true
+		}
+		if file != "" {
+			block := map[string]any{"type": "file", "path": file}
+			if name != "" {
+				block["name"] = name
+			}
+			return block, true
+		}
+	}
+	return nil, false
 }
 
 func (c *acpClient) newSession(ctx context.Context, opts Options) (string, error) {
@@ -200,6 +311,10 @@ func (c *acpClient) call(ctx context.Context, method string, params any) (json.R
 }
 
 func (c *acpClient) callWithID(ctx context.Context, id int64, method string, params any) (json.RawMessage, error) {
+	return c.callWithIDOrText(ctx, id, method, params, nil, 0)
+}
+
+func (c *acpClient) callWithIDOrText(ctx context.Context, id int64, method string, params any, touch <-chan struct{}, idleTimeout time.Duration) (json.RawMessage, error) {
 	ch := make(chan acpResponse, 1)
 	c.writeMu.Lock()
 	c.pending[id] = ch
@@ -213,15 +328,72 @@ func (c *acpClient) callWithID(ctx context.Context, id int64, method string, par
 		c.removePending(id)
 		return nil, err
 	}
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	seenText := false
+	if touch != nil && idleTimeout > 0 {
+		timer = time.NewTimer(idleTimeout)
+		if !timer.Stop() {
+			<-timer.C
+		}
+		defer timer.Stop()
+	}
 	select {
 	case resp := <-ch:
 		if resp.Error != nil {
 			return nil, fmt.Errorf("hermes acp %s failed: %s", method, resp.Error.Message)
 		}
 		return resp.Result, nil
+	case <-touch:
+		if timer != nil {
+			seenText = true
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(idleTimeout)
+			timerC = timer.C
+		}
+		return c.waitForResponseOrIdle(ctx, method, id, ch, touch, timer, timerC, seenText, idleTimeout)
 	case <-ctx.Done():
 		c.removePending(id)
+		c.stop()
 		return nil, ctx.Err()
+	}
+}
+
+func (c *acpClient) waitForResponseOrIdle(ctx context.Context, method string, id int64, ch <-chan acpResponse, touch <-chan struct{}, timer *time.Timer, timerC <-chan time.Time, seenText bool, idleTimeout time.Duration) (json.RawMessage, error) {
+	for {
+		select {
+		case resp := <-ch:
+			if resp.Error != nil {
+				return nil, fmt.Errorf("hermes acp %s failed: %s", method, resp.Error.Message)
+			}
+			return resp.Result, nil
+		case <-touch:
+			seenText = true
+			if timer != nil {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(idleTimeout)
+				timerC = timer.C
+			}
+		case <-timerC:
+			if seenText {
+				c.removePending(id)
+				return nil, nil
+			}
+		case <-ctx.Done():
+			c.removePending(id)
+			c.stop()
+			return nil, ctx.Err()
+		}
 	}
 }
 
@@ -282,11 +454,14 @@ func (c *acpClient) handleSessionUpdate(raw json.RawMessage) {
 		return
 	}
 	updateType, _ := params.Update["sessionUpdate"].(string)
-	if !strings.Contains(updateType, "agent_message") {
-		return
-	}
 	text := strings.TrimSpace(extractACPText(params.Update))
 	if text == "" {
+		return
+	}
+	if updateType != "" && strings.Contains(strings.ToLower(updateType), "user") {
+		return
+	}
+	if updateType != "" && !strings.Contains(strings.ToLower(updateType), "agent") && !strings.Contains(strings.ToLower(updateType), "message") {
 		return
 	}
 	c.currentMu.Lock()
@@ -295,6 +470,12 @@ func (c *acpClient) handleSessionUpdate(raw json.RawMessage) {
 			c.currentText.WriteString("\n")
 		}
 		c.currentText.WriteString(text)
+		if c.currentTouch != nil {
+			select {
+			case c.currentTouch <- struct{}{}:
+			default:
+			}
+		}
 	}
 	c.currentMu.Unlock()
 }
@@ -319,4 +500,15 @@ func extractACPText(v any) string {
 		}
 	}
 	return ""
+}
+
+func extractACPTextFromJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return ""
+	}
+	return extractACPText(v)
 }

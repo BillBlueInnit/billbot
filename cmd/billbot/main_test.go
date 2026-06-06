@@ -3,8 +3,10 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"billbot/internal/bridge"
@@ -76,6 +78,33 @@ func TestSetConfigValue(t *testing.T) {
 	if cfg.Models.SpecialModel != "special" {
 		t.Fatalf("special model = %q", cfg.Models.SpecialModel)
 	}
+	if err := setConfigValue(&cfg, "hermes.require_persistent", "false"); err != nil {
+		t.Fatalf("set require persistent: %v", err)
+	}
+	if cfg.Hermes.RequirePersistent {
+		t.Fatal("hermes.require_persistent not set")
+	}
+	if err := setConfigValue(&cfg, "hermes.profile_dir", "D:\\billbot\\hermes-profile"); err != nil {
+		t.Fatalf("set hermes profile dir: %v", err)
+	}
+	if cfg.Hermes.ProfileDir != "D:\\billbot\\hermes-profile" {
+		t.Fatalf("hermes.profile_dir = %q", cfg.Hermes.ProfileDir)
+	}
+	if err := setConfigValue(&cfg, "hermes.reset_profile_on_start", "false"); err != nil {
+		t.Fatalf("set reset profile: %v", err)
+	}
+	if cfg.Hermes.ResetProfileOnStart {
+		t.Fatal("hermes.reset_profile_on_start not set")
+	}
+	if err := setConfigValue(&cfg, "security.sandbox_backend", "command"); err != nil {
+		t.Fatalf("set sandbox backend: %v", err)
+	}
+	if err := setConfigValue(&cfg, "security.sandbox_command", "vm-run --name billbot --"); err != nil {
+		t.Fatalf("set sandbox command: %v", err)
+	}
+	if cfg.Security.SandboxBackend != "command" || len(cfg.Security.SandboxCommand) != 4 || cfg.Security.SandboxCommand[0] != "vm-run" {
+		t.Fatalf("sandbox config = backend:%q command:%#v", cfg.Security.SandboxBackend, cfg.Security.SandboxCommand)
+	}
 	if err := setConfigValue(&cfg, "models.heavy_timeout_sec", "0"); err == nil {
 		t.Fatal("expected invalid positive integer error")
 	}
@@ -124,6 +153,25 @@ func TestSimpleSet(t *testing.T) {
 	key, value, ok = simpleSet("admin 10001")
 	if !ok || key != "admin" || value != "10001" {
 		t.Fatalf("simple set admin = key=%q value=%q ok=%t", key, value, ok)
+	}
+	key, value, ok = simpleSet("管理员 10001")
+	if !ok || key != "管理员" || value != "10001" {
+		t.Fatalf("simple set chinese admin = key=%q value=%q ok=%t", key, value, ok)
+	}
+}
+
+func TestCLIChineseHelpAndUnknownCommand(t *testing.T) {
+	cfg := config.Default()
+	state := &cliState{cfg: cfg, bridgeSvc: bridge.NewService(cfg)}
+
+	out, _, _ := state.Execute(context.Background(), "帮助")
+	if !strings.Contains(out, "BillBot CLI 指令") || strings.Contains(out, "Commands:") {
+		t.Fatalf("unexpected help text: %s", out)
+	}
+
+	out, _, _ = state.Execute(context.Background(), "不存在")
+	if !strings.Contains(out, "未知指令") {
+		t.Fatalf("unexpected unknown command text: %s", out)
 	}
 }
 

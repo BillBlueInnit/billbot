@@ -28,6 +28,12 @@ func TestNormalizeFillsV01Defaults(t *testing.T) {
 	if cfg.Security.Mode != "sandbox" {
 		t.Fatalf("security mode = %q, want sandbox", cfg.Security.Mode)
 	}
+	if cfg.Security.SandboxBackend != "docker" {
+		t.Fatalf("sandbox backend = %q, want docker", cfg.Security.SandboxBackend)
+	}
+	if cfg.Security.SandboxDockerImage != "billbot-hermes:latest" {
+		t.Fatalf("sandbox docker image = %q, want billbot-hermes:latest", cfg.Security.SandboxDockerImage)
+	}
 }
 
 func TestNapCatEffectiveTokens(t *testing.T) {

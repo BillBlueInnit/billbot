@@ -54,6 +54,25 @@ func TestParseGroupMessageEvent(t *testing.T) {
 	}
 }
 
+func TestParseImageMessageEventKeepsAttachment(t *testing.T) {
+	raw := []byte(`{"post_type":"message","message_type":"private","self_id":12345,"user_id":67890,"message":[{"type":"image","data":{"url":"https://example.test/a.png","file":"abc.image","name":"a.png"}}]}`)
+
+	msg, ok := ParseMessageEvent(raw)
+	if !ok {
+		t.Fatal("image event was not parsed")
+	}
+	if strings.TrimSpace(msg.Text) != "" {
+		t.Fatalf("Text = %q, want empty", msg.Text)
+	}
+	if len(msg.Attachments) != 1 {
+		t.Fatalf("attachments = %#v, want one image", msg.Attachments)
+	}
+	att := msg.Attachments[0]
+	if att.Type != "image" || att.URL != "https://example.test/a.png" || att.File != "abc.image" || att.Name != "a.png" {
+		t.Fatalf("unexpected attachment: %#v", att)
+	}
+}
+
 func TestParseIgnoresNonMessageEvent(t *testing.T) {
 	if _, ok := ParseMessageEvent([]byte(`{"post_type":"notice"}`)); ok {
 		t.Fatal("non-message event was parsed")

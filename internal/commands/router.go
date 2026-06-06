@@ -32,15 +32,15 @@ func Handle(ctx context.Context, cfg config.Config, msg connector.Message) (Resu
 	}
 	cmd, ok := find(cfg.Commands, name)
 	if !ok {
-		return Result{Handled: true, Reply: "Unknown command: /" + name}, nil
+		return Result{Handled: true, Reply: "未知指令：/" + name}, nil
 	}
 	if cmd.RequireAt && !isAtBot(msg.Text, cfg.Bridge.SelfID, msg.BotID) {
-		return Result{Handled: true, Reply: "Command /" + name + " requires @bot."}, nil
+		return Result{Handled: true, Reply: "指令 /" + name + " 需要先 @机器人。"}, nil
 	}
 	if cmd.OwnerOnly || cmd.Type == "exec" {
 		userID, _ := strconv.ParseInt(msg.UserID, 10, 64)
 		if !isOwner(cfg.Owners, userID) {
-			return Result{Handled: true, Reply: "Command /" + name + " requires owner."}, nil
+			return Result{Handled: true, Reply: "指令 /" + name + " 需要管理员权限。"}, nil
 		}
 	}
 
@@ -53,7 +53,7 @@ func Handle(ctx context.Context, cfg config.Config, msg connector.Message) (Resu
 		reply, err := runExec(ctx, cmd)
 		return Result{Handled: true, Reply: reply}, err
 	default:
-		return Result{Handled: true, Reply: "Unsupported command type: " + cmd.Type}, nil
+		return Result{Handled: true, Reply: "不支持的指令类型：" + cmd.Type}, nil
 	}
 }
 
